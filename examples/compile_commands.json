@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "/workspace/pwn-agent/examples",
+    "file": "vuln_demo.c",
+    "command": "clang -Wall -Wextra -g -O0 vuln_demo.c -o vuln_demo"
+  }
+]

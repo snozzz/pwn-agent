@@ -50,3 +50,5 @@ The command-execution layer is intentionally constrained:
 ## Current status
 
 This MVP is intended for defensive security review on local codebases with constrained command execution.
+
+It now also supports ingesting `compile_commands.json` and surfacing a compile database summary during audit runs.
