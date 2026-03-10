@@ -6,6 +6,7 @@ from typing import Any
 
 from .compdb import CompileDatabase
 from .config import AgentConfig
+from .pipeline import RebuildVerifyResult, rebuild_and_verify
 from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
 from .reporting import render_markdown
@@ -20,6 +21,7 @@ class WorkflowResult:
     report_markdown: str
     compile_db_summary: dict[str, Any] | None = None
     verification: VerificationResult | None = None
+    rebuild_verify: RebuildVerifyResult | None = None
 
 
 class AuditWorkflow:
@@ -50,6 +52,7 @@ class AuditWorkflow:
             report += f"- Files: `{', '.join(compile_db_summary['files'])}`\n"
 
         verification = None
+        rebuild_verify = None
         plan_path = self.root / "verification-plan.json"
         if plan_path.exists():
             plan = VerificationPlan.load(plan_path)
@@ -66,10 +69,31 @@ class AuditWorkflow:
                 if verification.returncode == 124:
                     report += "- Note: verification command hit the policy timeout\n"
 
+        compdb_path = self.root / "compile_commands.json"
+        if compdb_path.exists():
+            rebuild_verify = rebuild_and_verify(
+                root=self.root,
+                config=self.config,
+                target_index=1,
+                output_name="audit-sanitized-target",
+                compdb_path=compdb_path,
+                plan_path=plan_path if plan_path.exists() else None,
+            )
+            report += "\n## Rebuild + Verify Pipeline\n\n"
+            report += f"- Rebuild return code: **{rebuild_verify.rebuild.returncode}**\n"
+            report += f"- Output binary: `{Path(rebuild_verify.output_binary).name}`\n"
+            if rebuild_verify.verification is not None:
+                report += f"- Verify return code: **{rebuild_verify.verification.returncode}**\n"
+                report += f"- Verify signal: **{str(rebuild_verify.verification.sanitizer_signal).lower()}**\n"
+                if rebuild_verify.verification.stderr.strip():
+                    snippet = rebuild_verify.verification.stderr.strip().splitlines()[0]
+                    report += f"- Verify stderr head: `{snippet}`\n"
+
         return WorkflowResult(
             scan=scan,
             command_logs=command_logs,
             report_markdown=report,
             compile_db_summary=compile_db_summary,
             verification=verification,
+            rebuild_verify=rebuild_verify,
         )
