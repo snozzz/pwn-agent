@@ -36,6 +36,7 @@ The first MVP focuses on:
 python3 -m src.main scan --root /path/to/project --report out/report.md
 python3 -m src.main audit --root /path/to/project --report out/audit.md
 python3 -m src.main audit --root /path/to/project --report out/audit.md --config pwn-agent.json
+python3 -m src.main sanitize-build --root examples --source examples/vuln_demo.c --output examples/vuln_demo_asan --config pwn-agent.json
 ```
 
 ## Safety model

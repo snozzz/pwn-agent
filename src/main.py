@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .config import AgentConfig
 from .reporting import render_markdown, write_report
+from .sanitizers import build_single_c_file
 from .scanner import scan_project
 from .workflow import AuditWorkflow
 
@@ -21,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--root", type=Path, required=True, help="project root to audit")
     audit.add_argument("--report", type=Path, required=True, help="markdown report output path")
     audit.add_argument("--config", type=Path, help="optional JSON config path")
+
+    sanitize = subparsers.add_parser("sanitize-build", help="build a single C file with sanitizers")
+    sanitize.add_argument("--root", type=Path, required=True, help="workspace root")
+    sanitize.add_argument("--source", type=Path, required=True, help="single C source file to compile")
+    sanitize.add_argument("--output", type=Path, required=True, help="output binary path")
+    sanitize.add_argument("--config", type=Path, help="optional JSON config path")
 
     return parser
 
@@ -46,6 +53,23 @@ def main() -> int:
             f"commands={len(result.command_logs)}; wrote {args.report}"
         )
         return 0
+
+    if args.command == "sanitize-build":
+        config = AgentConfig.load(args.config)
+        from .policy import CommandPolicy
+
+        policy = CommandPolicy(
+            args.root,
+            allowlist=config.allowlist,
+            timeout_seconds=config.timeout_seconds,
+        )
+        result = build_single_c_file(policy, args.source, args.output)
+        print(f"sanitize build rc={result.returncode}")
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="")
+        return result.returncode
 
     parser.error("unknown command")
     return 2
