@@ -9,6 +9,7 @@ from .pipeline import rebuild_and_verify
 from .reporting import render_markdown, write_report
 from .rebuild import default_compdb_path, extract_targets, rebuild_target, rewrite_for_sanitizers
 from .sanitizers import build_single_c_file
+from .sarif import write_sarif
 from .scanner import scan_project
 from .verification import run_binary
 from .workflow import AuditWorkflow
@@ -21,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan", help="scan a C/C++ project")
     scan.add_argument("--root", type=Path, required=True, help="project root to scan")
     scan.add_argument("--report", type=Path, required=True, help="markdown report output path")
+
+    sarif = subparsers.add_parser("scan-sarif", help="scan a C/C++ project and export SARIF")
+    sarif.add_argument("--root", type=Path, required=True, help="project root to scan")
+    sarif.add_argument("--output", type=Path, required=True, help="SARIF output path")
 
     audit = subparsers.add_parser("audit", help="run the constrained audit workflow")
     audit.add_argument("--root", type=Path, required=True, help="project root to audit")
@@ -70,6 +75,12 @@ def main() -> int:
         report = render_markdown(result)
         write_report(args.report, report)
         print(f"scanned {result.files_scanned} files; wrote {args.report}")
+        return 0
+
+    if args.command == "scan-sarif":
+        result = scan_project(args.root)
+        write_sarif(args.output, result)
+        print(f"scanned {result.files_scanned} files; wrote {args.output}")
         return 0
 
     if args.command == "audit":
