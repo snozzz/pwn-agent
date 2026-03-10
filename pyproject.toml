@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pwn-agent"
+version = "0.1.0"
+description = "MVP C/C++ security analysis agent"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.setuptools]
+py-modules = []
