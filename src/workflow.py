@@ -12,6 +12,7 @@ from .pipeline import RebuildVerifyResult, rebuild_and_verify
 from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
 from .reporting import render_markdown
+from .rebuild import extract_targets
 from .scanner import ScanResult, scan_project
 from .surfaces import InputSurface, detect_input_surfaces
 from .trace import AuditTrace, new_trace
@@ -59,7 +60,9 @@ class AuditWorkflow:
         compile_db_summary = None
         compdb_path = self.root / "compile_commands.json"
         if compdb_path.exists():
-            compile_db_summary = CompileDatabase.load(compdb_path).summary()
+            compdb = CompileDatabase.load(compdb_path)
+            compile_db_summary = compdb.summary()
+            compile_db_summary["targets"] = len(extract_targets(compdb))
             trace.add("compile-db", "found", entries=compile_db_summary["entries"])
         else:
             trace.add("compile-db", "missing")
@@ -158,6 +161,7 @@ class AuditWorkflow:
         if compile_db_summary:
             report += "\n## Compile Database\n\n"
             report += f"- Entries: **{compile_db_summary['entries']}**\n"
+            report += f"- Targets: **{compile_db_summary['targets']}**\n"
             report += f"- Directories: `{', '.join(compile_db_summary['directories'])}`\n"
             report += f"- Files: `{', '.join(compile_db_summary['files'])}`\n"
 

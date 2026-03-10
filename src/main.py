@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .audit_export import write_audit_summary
 from .config import AgentConfig
 from .compdb import CompileDatabase
 from .pipeline import rebuild_and_verify
@@ -31,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--root", type=Path, required=True, help="project root to audit")
     audit.add_argument("--report", type=Path, required=True, help="markdown report output path")
     audit.add_argument("--trace-json", type=Path, help="optional trace json output path")
+    audit.add_argument("--audit-json", type=Path, help="optional structured audit summary output path")
     audit.add_argument("--config", type=Path, help="optional JSON config path")
 
     sanitize = subparsers.add_parser("sanitize-build", help="build a single C file with sanitizers")
@@ -91,6 +93,8 @@ def main() -> int:
         write_report(args.report, result.report_markdown)
         if args.trace_json:
             result.trace.write_json(args.trace_json)
+        if args.audit_json:
+            write_audit_summary(args.audit_json, result)
         print(
             f"audited {result.scan.files_scanned} files; findings={len(result.scan.findings)}; "
             f"commands={len(result.command_logs)}; wrote {args.report}"

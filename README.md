@@ -36,6 +36,7 @@ The first MVP focuses on:
 python3 -m src.main scan --root /path/to/project --report out/report.md
 python3 -m src.main scan-sarif --root /path/to/project --output out/report.sarif
 python3 -m src.main audit --root /path/to/project --report out/audit.md --trace-json out/trace.json
+python3 -m src.main audit --root /path/to/project --report out/audit.md --audit-json out/audit.json
 python3 -m src.main audit --root /path/to/project --report out/audit.md --config pwn-agent.json
 python3 -m src.main sanitize-build --root examples --source examples/vuln_demo.c --output examples/vuln_demo_asan --config pwn-agent.json
 python3 -m src.main verify-run --root examples --binary examples/vuln_demo_asan $(python3 - <<'PY'
@@ -46,6 +47,7 @@ python3 -m src.main audit --root examples --report out/audit.md --config pwn-age
 # if examples/verification-plan.json exists, audit will append verification results
 # if compile_commands.json exists, audit will also append rebuild+verify pipeline evidence
 # audit will also list detected input surfaces, file-level hotspots, and function focus when functions are detected
+# --audit-json writes a single structured summary for downstream tooling
 python3 -m src.main rebuild-plan --root examples
 python3 -m src.main rebuild-target --root examples --index 1 --output-name vuln_demo_rebuilt_asan --config pwn-agent.json
 python3 -m src.main rebuild-verify --root examples --index 1 --output-name vuln_demo_pipeline_asan --config pwn-agent.json
@@ -65,4 +67,5 @@ The command-execution layer is intentionally constrained:
 This MVP is intended for defensive security review on local codebases with constrained command execution.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
-and best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions.
+best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
+and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
