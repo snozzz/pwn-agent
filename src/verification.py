@@ -21,7 +21,16 @@ def run_binary(policy: CommandPolicy, binary: Path, args: list[str] | None = Non
     result: CommandResult = policy.run([f"./{binary.name}", *run_args], cwd=binary.parent)
     stderr = result.stderr or ""
     stdout = result.stdout or ""
-    sanitizer_signal = any(marker in stderr for marker in ["AddressSanitizer", "runtime error:", "UndefinedBehaviorSanitizer"])
+    sanitizer_signal = any(
+        marker in stderr
+        for marker in [
+            "AddressSanitizer",
+            "runtime error:",
+            "UndefinedBehaviorSanitizer",
+            "buffer overflow detected",
+            "stack smashing detected",
+        ]
+    )
     return VerificationResult(
         binary=str(binary),
         argv=[str(binary), *run_args],
