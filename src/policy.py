@@ -59,10 +59,19 @@ class CommandPolicy:
             raise PolicyError("empty command")
 
         command = argv[0]
+        safe_cwd = self._resolve_cwd(cwd)
+
+        if command.startswith("./"):
+            binary_path = (safe_cwd / command[2:]).resolve()
+            if safe_cwd not in binary_path.parents and binary_path != safe_cwd:
+                raise PolicyError(f"binary escapes cwd: {binary_path}")
+            if not binary_path.exists():
+                raise PolicyError(f"binary not found: {binary_path}")
+            return list(argv), safe_cwd
+
         if command not in self.allowlist:
             raise PolicyError(f"command not allowed: {command}")
 
-        safe_cwd = self._resolve_cwd(cwd)
         return list(argv), safe_cwd
 
     def run(self, argv: Sequence[str], cwd: Path | None = None) -> CommandResult:

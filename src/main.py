@@ -7,6 +7,7 @@ from .config import AgentConfig
 from .reporting import render_markdown, write_report
 from .sanitizers import build_single_c_file
 from .scanner import scan_project
+from .verification import run_binary
 from .workflow import AuditWorkflow
 
 
@@ -28,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     sanitize.add_argument("--source", type=Path, required=True, help="single C source file to compile")
     sanitize.add_argument("--output", type=Path, required=True, help="output binary path")
     sanitize.add_argument("--config", type=Path, help="optional JSON config path")
+
+    verify = subparsers.add_parser("verify-run", help="run a local binary and look for sanitizer output")
+    verify.add_argument("--root", type=Path, required=True, help="workspace root")
+    verify.add_argument("--binary", type=Path, required=True, help="binary path to execute")
+    verify.add_argument("args", nargs="*", help="arguments for the binary")
+    verify.add_argument("--config", type=Path, help="optional JSON config path")
 
     return parser
 
@@ -65,6 +72,23 @@ def main() -> int:
         )
         result = build_single_c_file(policy, args.source, args.output)
         print(f"sanitize build rc={result.returncode}")
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="")
+        return result.returncode
+
+    if args.command == "verify-run":
+        config = AgentConfig.load(args.config)
+        from .policy import CommandPolicy
+
+        policy = CommandPolicy(
+            args.root,
+            allowlist=config.allowlist,
+            timeout_seconds=config.timeout_seconds,
+        )
+        result = run_binary(policy, args.binary, args=args.args)
+        print(f"verify run rc={result.returncode} sanitizer_signal={str(result.sanitizer_signal).lower()}")
         if result.stdout:
             print(result.stdout, end="")
         if result.stderr:
