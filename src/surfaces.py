@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING
 
-from .scanner import SOURCE_SUFFIXES, iter_source_files
+from .scanner import iter_source_files
+
+if TYPE_CHECKING:
+    from .function_index import SourceFunctionIndex
 
 
 SURFACE_PATTERNS = {
@@ -22,11 +26,17 @@ class InputSurface:
     file_path: str
     line_number: int
     line_text: str
+    function_name: str | None = None
 
 
-def detect_input_surfaces(root: Path) -> list[InputSurface]:
+def detect_input_surfaces(root: Path, function_index: SourceFunctionIndex | None = None) -> list[InputSurface]:
     surfaces: list[InputSurface] = []
+    if function_index is None:
+        from .function_index import build_function_index
+
+        function_index = build_function_index(root)
     for file_path in iter_source_files(root):
+        relative_path = str(file_path.relative_to(root))
         try:
             lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
@@ -38,9 +48,10 @@ def detect_input_surfaces(root: Path) -> list[InputSurface]:
                     surfaces.append(
                         InputSurface(
                             category=category,
-                            file_path=str(file_path.relative_to(root)),
+                            file_path=relative_path,
                             line_number=idx,
                             line_text=line.strip(),
+                            function_name=function_index.lookup(relative_path, idx),
                         )
                     )
     return surfaces

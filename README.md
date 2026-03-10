@@ -45,7 +45,7 @@ PY
 python3 -m src.main audit --root examples --report out/audit.md --config pwn-agent.json
 # if examples/verification-plan.json exists, audit will append verification results
 # if compile_commands.json exists, audit will also append rebuild+verify pipeline evidence
-# audit will also list detected input surfaces and file-level risk hotspots
+# audit will also list detected input surfaces, file-level hotspots, and function focus when functions are detected
 python3 -m src.main rebuild-plan --root examples
 python3 -m src.main rebuild-target --root examples --index 1 --output-name vuln_demo_rebuilt_asan --config pwn-agent.json
 python3 -m src.main rebuild-verify --root examples --index 1 --output-name vuln_demo_pipeline_asan --config pwn-agent.json
@@ -64,4 +64,5 @@ The command-execution layer is intentionally constrained:
 
 This MVP is intended for defensive security review on local codebases with constrained command execution.
 
-It now also supports ingesting `compile_commands.json` and surfacing a compile database summary during audit runs.
+It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
+and best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions.

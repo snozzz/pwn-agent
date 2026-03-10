@@ -39,6 +39,11 @@ def render_markdown(result: ScanResult, verified_signal: bool = False) -> str:
             [
                 f"### {finding.category}",
                 f"- File: `{finding.file_path}`",
+                (
+                    f"- Function: `{finding.function_name}`"
+                    if finding.function_name is not None
+                    else "- Function: `unknown`"
+                ),
                 f"- Line: {finding.line_number}",
                 f"- Severity: **{finding.severity}**",
                 f"- Confidence: **{finding.confidence}**",

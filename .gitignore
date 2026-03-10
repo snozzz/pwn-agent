@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 reports/
 .cache/
+examples/*_asan
+examples/audit-sanitized-target

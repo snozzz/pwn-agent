@@ -6,7 +6,8 @@ from typing import Any
 
 from .compdb import CompileDatabase
 from .config import AgentConfig
-from .hotspots import FileHotspot, rank_hotspots
+from .function_index import build_function_index
+from .hotspots import FileHotspot, FunctionHotspot, rank_function_hotspots, rank_hotspots
 from .pipeline import RebuildVerifyResult, rebuild_and_verify
 from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
@@ -25,6 +26,8 @@ class WorkflowResult:
     trace: AuditTrace
     input_surfaces: list[InputSurface]
     hotspots: list[FileHotspot]
+    function_hotspots: list[FunctionHotspot]
+    function_coverage: dict[str, int]
     compile_db_summary: dict[str, Any] | None = None
     verification: VerificationResult | None = None
     rebuild_verify: RebuildVerifyResult | None = None
@@ -46,9 +49,11 @@ class AuditWorkflow:
         discovery = self.policy.run(["find", ".", "-maxdepth", "2", "-type", "f"])
         command_logs.append(discovery)
         trace.add("project-discovery", "ok", command="find . -maxdepth 2 -type f", returncode=discovery.returncode)
-        scan = scan_project(self.root)
+        function_index = build_function_index(self.root)
+        trace.add("function-detection", "ok", functions=function_index.function_count())
+        scan = scan_project(self.root, function_index=function_index)
         trace.add("source-scan", "ok", files_scanned=scan.files_scanned, findings=len(scan.findings))
-        input_surfaces = detect_input_surfaces(self.root)
+        input_surfaces = detect_input_surfaces(self.root, function_index=function_index)
         trace.add("input-surface-detection", "ok", surfaces=len(input_surfaces))
 
         compile_db_summary = None
@@ -103,7 +108,22 @@ class AuditWorkflow:
             or (rebuild_verify is not None and rebuild_verify.verification is not None and rebuild_verify.verification.sanitizer_signal)
         )
         hotspots = rank_hotspots(scan, input_surfaces, verified_signal=verified_signal)
+        function_hotspots = rank_function_hotspots(scan, input_surfaces, verified_signal=verified_signal)
+        function_coverage = {
+            "detected_functions": function_index.function_count(),
+            "mapped_findings": sum(1 for finding in scan.findings if finding.function_name is not None),
+            "unmapped_findings": sum(1 for finding in scan.findings if finding.function_name is None),
+            "mapped_surfaces": sum(1 for surface in input_surfaces if surface.function_name is not None),
+            "unmapped_surfaces": sum(1 for surface in input_surfaces if surface.function_name is None),
+        }
         trace.add("hotspot-ranking", "ok", hotspots=len(hotspots), top=(hotspots[0].file_path if hotspots else "none"))
+        trace.add(
+            "function-hotspot-ranking",
+            "ok",
+            hotspots=len(function_hotspots),
+            mapped_findings=function_coverage["mapped_findings"],
+            mapped_surfaces=function_coverage["mapped_surfaces"],
+        )
         report = render_markdown(scan, verified_signal=verified_signal)
         if hotspots:
             report += "\n## Risk Hotspots\n\n"
@@ -113,10 +133,27 @@ class AuditWorkflow:
                     f"surfaces={hotspot.surfaces} verified={str(hotspot.verified).lower()}\n"
                 )
 
+        if function_hotspots:
+            report += "\n## Function Focus\n\n"
+            report += (
+                f"- Coverage: functions={function_coverage['detected_functions']} "
+                f"mapped-findings={function_coverage['mapped_findings']} "
+                f"mapped-surfaces={function_coverage['mapped_surfaces']}\n"
+            )
+            for hotspot in function_hotspots[:10]:
+                report += (
+                    f"- `{hotspot.function_name}` in `{hotspot.file_path}` score=**{hotspot.score}** "
+                    f"findings={hotspot.findings} surfaces={hotspot.surfaces} "
+                    f"verified={str(hotspot.verified).lower()}\n"
+                )
+
         if input_surfaces:
             report += "\n## Input Surfaces\n\n"
             for surface in input_surfaces[:20]:
-                report += f"- `{surface.category}` in `{surface.file_path}:{surface.line_number}` → `{surface.line_text}`\n"
+                location = f"{surface.file_path}:{surface.line_number}"
+                if surface.function_name is not None:
+                    location += f" ({surface.function_name})"
+                report += f"- `{surface.category}` in `{location}` → `{surface.line_text}`\n"
 
         if compile_db_summary:
             report += "\n## Compile Database\n\n"
@@ -155,6 +192,8 @@ class AuditWorkflow:
             trace=trace,
             input_surfaces=input_surfaces,
             hotspots=hotspots,
+            function_hotspots=function_hotspots,
+            function_coverage=function_coverage,
             compile_db_summary=compile_db_summary,
             verification=verification,
             rebuild_verify=rebuild_verify,

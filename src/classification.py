@@ -11,6 +11,7 @@ class ClassifiedFinding:
     file_path: str
     line_number: int
     line_text: str
+    function_name: str | None
     severity: str
     confidence: str
     status: str
@@ -36,6 +37,7 @@ def classify_finding(finding: Finding, verified_signal: bool = False) -> Classif
         file_path=finding.file_path,
         line_number=finding.line_number,
         line_text=finding.line_text,
+        function_name=finding.function_name,
         severity=severity,
         confidence=confidence,
         status=status,

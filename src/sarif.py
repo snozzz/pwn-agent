@@ -80,6 +80,7 @@ def _sarif_result(finding: ClassifiedFinding, rule_id: str, message: str) -> dic
             "confidence": finding.confidence,
             "status": finding.status,
             "score": finding.score,
+            "functionName": finding.function_name,
         },
     }
 
