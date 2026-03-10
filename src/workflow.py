@@ -44,13 +44,6 @@ class AuditWorkflow:
         if compdb_path.exists():
             compile_db_summary = CompileDatabase.load(compdb_path).summary()
 
-        report = render_markdown(scan)
-        if compile_db_summary:
-            report += "\n## Compile Database\n\n"
-            report += f"- Entries: **{compile_db_summary['entries']}**\n"
-            report += f"- Directories: `{', '.join(compile_db_summary['directories'])}`\n"
-            report += f"- Files: `{', '.join(compile_db_summary['files'])}`\n"
-
         verification = None
         rebuild_verify = None
         plan_path = self.root / "verification-plan.json"
@@ -59,15 +52,6 @@ class AuditWorkflow:
             binary_path = self.root / plan.binary
             if binary_path.exists():
                 verification = run_binary(self.policy, binary_path, args=plan.args)
-                report += "\n## Verification\n\n"
-                report += f"- Binary: `{plan.binary}`\n"
-                report += f"- Return code: **{verification.returncode}**\n"
-                report += f"- Verification signal: **{str(verification.sanitizer_signal).lower()}**\n"
-                if verification.stderr.strip():
-                    snippet = verification.stderr.strip().splitlines()[0]
-                    report += f"- Stderr head: `{snippet}`\n"
-                if verification.returncode == 124:
-                    report += "- Note: verification command hit the policy timeout\n"
 
         compdb_path = self.root / "compile_commands.json"
         if compdb_path.exists():
@@ -79,6 +63,30 @@ class AuditWorkflow:
                 compdb_path=compdb_path,
                 plan_path=plan_path if plan_path.exists() else None,
             )
+
+        verified_signal = bool(
+            (verification is not None and verification.sanitizer_signal)
+            or (rebuild_verify is not None and rebuild_verify.verification is not None and rebuild_verify.verification.sanitizer_signal)
+        )
+        report = render_markdown(scan, verified_signal=verified_signal)
+        if compile_db_summary:
+            report += "\n## Compile Database\n\n"
+            report += f"- Entries: **{compile_db_summary['entries']}**\n"
+            report += f"- Directories: `{', '.join(compile_db_summary['directories'])}`\n"
+            report += f"- Files: `{', '.join(compile_db_summary['files'])}`\n"
+
+        if verification is not None:
+            report += "\n## Verification\n\n"
+            report += f"- Binary: `{plan.binary}`\n"
+            report += f"- Return code: **{verification.returncode}**\n"
+            report += f"- Verification signal: **{str(verification.sanitizer_signal).lower()}**\n"
+            if verification.stderr.strip():
+                snippet = verification.stderr.strip().splitlines()[0]
+                report += f"- Stderr head: `{snippet}`\n"
+            if verification.returncode == 124:
+                report += "- Note: verification command hit the policy timeout\n"
+
+        if rebuild_verify is not None:
             report += "\n## Rebuild + Verify Pipeline\n\n"
             report += f"- Rebuild return code: **{rebuild_verify.rebuild.returncode}**\n"
             report += f"- Output binary: `{Path(rebuild_verify.output_binary).name}`\n"
