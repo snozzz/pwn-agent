@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .classification import ClassifiedFinding, classify_findings
+from .dedup import deduplicate_findings
 from .scanner import ScanResult
 
 
@@ -24,7 +25,7 @@ def _level(severity: str) -> str:
 
 
 def sarif_dict(result: ScanResult, verified_signal: bool = False) -> dict:
-    findings = classify_findings(result.findings, verified_signal=verified_signal)
+    findings = deduplicate_findings(classify_findings(result.findings, verified_signal=verified_signal))
     rules = []
     seen = set()
     sarif_results = []

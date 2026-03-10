@@ -4,11 +4,12 @@ from collections import Counter
 from pathlib import Path
 
 from .classification import classify_findings
+from .dedup import deduplicate_findings
 from .scanner import ScanResult
 
 
 def render_markdown(result: ScanResult, verified_signal: bool = False) -> str:
-    classified = classify_findings(result.findings, verified_signal=verified_signal)
+    classified = deduplicate_findings(classify_findings(result.findings, verified_signal=verified_signal))
     counts = Counter(f.category for f in classified)
     lines = [
         "# Scan Report",
