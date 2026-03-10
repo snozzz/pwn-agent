@@ -41,6 +41,9 @@ python3 -m src.main verify-run --root examples --binary examples/vuln_demo_asan 
 print('A' * 256)
 PY
 )
+python3 -m src.main audit --root examples --report out/audit.md --config pwn-agent.json
+# if examples/verification-plan.json exists, audit will append verification results
+python3 -m src.main rebuild-plan --root examples
 ```
 
 ## Safety model

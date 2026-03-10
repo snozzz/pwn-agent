@@ -4,7 +4,9 @@ import argparse
 from pathlib import Path
 
 from .config import AgentConfig
+from .compdb import CompileDatabase
 from .reporting import render_markdown, write_report
+from .rebuild import default_compdb_path, extract_targets, rewrite_for_sanitizers
 from .sanitizers import build_single_c_file
 from .scanner import scan_project
 from .verification import run_binary
@@ -35,6 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--binary", type=Path, required=True, help="binary path to execute")
     verify.add_argument("args", nargs="*", help="arguments for the binary")
     verify.add_argument("--config", type=Path, help="optional JSON config path")
+
+    plan = subparsers.add_parser("rebuild-plan", help="show sanitizer rebuild targets from compile_commands.json")
+    plan.add_argument("--root", type=Path, required=True, help="project root")
+    plan.add_argument("--compdb", type=Path, help="optional compile_commands.json path")
 
     return parser
 
@@ -94,6 +100,18 @@ def main() -> int:
         if result.stderr:
             print(result.stderr, end="")
         return result.returncode
+
+    if args.command == "rebuild-plan":
+        compdb_path = args.compdb or default_compdb_path(args.root)
+        compdb = CompileDatabase.load(compdb_path)
+        targets = extract_targets(compdb)
+        print(f"targets={len(targets)}")
+        for index, target in enumerate(targets, start=1):
+            rewritten = rewrite_for_sanitizers(target, f"sanitized-target-{index}")
+            print(f"[{index}] source={target.source_file} dir={target.directory}")
+            print("    original:", " ".join(target.compiler_argv))
+            print("    rewritten:", " ".join(rewritten))
+        return 0
 
     parser.error("unknown command")
     return 2
