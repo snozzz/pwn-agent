@@ -11,6 +11,7 @@ from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
 from .reporting import render_markdown
 from .scanner import ScanResult, scan_project
+from .trace import AuditTrace, new_trace
 from .verification import VerificationResult, run_binary
 
 
@@ -19,6 +20,7 @@ class WorkflowResult:
     scan: ScanResult
     command_logs: list[CommandResult]
     report_markdown: str
+    trace: AuditTrace
     compile_db_summary: dict[str, Any] | None = None
     verification: VerificationResult | None = None
     rebuild_verify: RebuildVerifyResult | None = None
@@ -35,14 +37,21 @@ class AuditWorkflow:
         )
 
     def run(self) -> WorkflowResult:
+        trace = new_trace()
         command_logs: list[CommandResult] = []
-        command_logs.append(self.policy.run(["find", ".", "-maxdepth", "2", "-type", "f"]))
+        discovery = self.policy.run(["find", ".", "-maxdepth", "2", "-type", "f"])
+        command_logs.append(discovery)
+        trace.add("project-discovery", "ok", command="find . -maxdepth 2 -type f", returncode=discovery.returncode)
         scan = scan_project(self.root)
+        trace.add("source-scan", "ok", files_scanned=scan.files_scanned, findings=len(scan.findings))
 
         compile_db_summary = None
         compdb_path = self.root / "compile_commands.json"
         if compdb_path.exists():
             compile_db_summary = CompileDatabase.load(compdb_path).summary()
+            trace.add("compile-db", "found", entries=compile_db_summary["entries"])
+        else:
+            trace.add("compile-db", "missing")
 
         verification = None
         rebuild_verify = None
@@ -50,8 +59,20 @@ class AuditWorkflow:
         if plan_path.exists():
             plan = VerificationPlan.load(plan_path)
             binary_path = self.root / plan.binary
+            trace.add("verification-plan", "found", binary=plan.binary, argc=len(plan.args))
             if binary_path.exists():
                 verification = run_binary(self.policy, binary_path, args=plan.args)
+                trace.add(
+                    "verification-run",
+                    "ok",
+                    binary=plan.binary,
+                    returncode=verification.returncode,
+                    sanitizer_signal=verification.sanitizer_signal,
+                )
+            else:
+                trace.add("verification-run", "skipped", reason="binary missing", binary=plan.binary)
+        else:
+            trace.add("verification-plan", "missing")
 
         compdb_path = self.root / "compile_commands.json"
         if compdb_path.exists():
@@ -62,6 +83,13 @@ class AuditWorkflow:
                 output_name="audit-sanitized-target",
                 compdb_path=compdb_path,
                 plan_path=plan_path if plan_path.exists() else None,
+            )
+            trace.add(
+                "rebuild-verify",
+                "ok",
+                rebuild_returncode=rebuild_verify.rebuild.returncode,
+                verify_returncode=(rebuild_verify.verification.returncode if rebuild_verify.verification is not None else "none"),
+                verify_signal=(rebuild_verify.verification.sanitizer_signal if rebuild_verify.verification is not None else False),
             )
 
         verified_signal = bool(
@@ -97,10 +125,13 @@ class AuditWorkflow:
                     snippet = rebuild_verify.verification.stderr.strip().splitlines()[0]
                     report += f"- Verify stderr head: `{snippet}`\n"
 
+        report += "\n" + trace.to_markdown()
+
         return WorkflowResult(
             scan=scan,
             command_logs=command_logs,
             report_markdown=report,
+            trace=trace,
             compile_db_summary=compile_db_summary,
             verification=verification,
             rebuild_verify=rebuild_verify,

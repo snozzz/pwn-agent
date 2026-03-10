@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit", help="run the constrained audit workflow")
     audit.add_argument("--root", type=Path, required=True, help="project root to audit")
     audit.add_argument("--report", type=Path, required=True, help="markdown report output path")
+    audit.add_argument("--trace-json", type=Path, help="optional trace json output path")
     audit.add_argument("--config", type=Path, help="optional JSON config path")
 
     sanitize = subparsers.add_parser("sanitize-build", help="build a single C file with sanitizers")
@@ -88,6 +89,8 @@ def main() -> int:
         workflow = AuditWorkflow(args.root, config=config)
         result = workflow.run()
         write_report(args.report, result.report_markdown)
+        if args.trace_json:
+            result.trace.write_json(args.trace_json)
         print(
             f"audited {result.scan.files_scanned} files; findings={len(result.scan.findings)}; "
             f"commands={len(result.command_logs)}; wrote {args.report}"
