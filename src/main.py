@@ -6,7 +6,7 @@ from pathlib import Path
 from .config import AgentConfig
 from .compdb import CompileDatabase
 from .reporting import render_markdown, write_report
-from .rebuild import default_compdb_path, extract_targets, rewrite_for_sanitizers
+from .rebuild import default_compdb_path, extract_targets, rebuild_target, rewrite_for_sanitizers
 from .sanitizers import build_single_c_file
 from .scanner import scan_project
 from .verification import run_binary
@@ -41,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("rebuild-plan", help="show sanitizer rebuild targets from compile_commands.json")
     plan.add_argument("--root", type=Path, required=True, help="project root")
     plan.add_argument("--compdb", type=Path, help="optional compile_commands.json path")
+
+    rebuild = subparsers.add_parser("rebuild-target", help="rebuild one compile database target with sanitizer flags")
+    rebuild.add_argument("--root", type=Path, required=True, help="project root")
+    rebuild.add_argument("--index", type=int, default=1, help="1-based target index from rebuild-plan")
+    rebuild.add_argument("--output-name", default="sanitized-target", help="output binary name")
+    rebuild.add_argument("--compdb", type=Path, help="optional compile_commands.json path")
+    rebuild.add_argument("--config", type=Path, help="optional JSON config path")
 
     return parser
 
@@ -112,6 +119,29 @@ def main() -> int:
             print("    original:", " ".join(target.compiler_argv))
             print("    rewritten:", " ".join(rewritten))
         return 0
+
+    if args.command == "rebuild-target":
+        config = AgentConfig.load(args.config)
+        from .policy import CommandPolicy
+
+        compdb_path = args.compdb or default_compdb_path(args.root)
+        compdb = CompileDatabase.load(compdb_path)
+        targets = extract_targets(compdb)
+        if args.index < 1 or args.index > len(targets):
+            raise SystemExit(f"target index out of range: {args.index}")
+        policy = CommandPolicy(
+            args.root,
+            allowlist=config.allowlist,
+            timeout_seconds=config.timeout_seconds,
+        )
+        target = targets[args.index - 1]
+        result = rebuild_target(policy, target, args.output_name)
+        print(f"rebuild rc={result.returncode}")
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="")
+        return result.returncode
 
     parser.error("unknown command")
     return 2

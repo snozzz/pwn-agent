@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .compdb import CompileDatabase, CompileCommand
+from .policy import CommandPolicy, CommandResult
 
 
 @dataclass
@@ -65,3 +66,13 @@ def rewrite_for_sanitizers(target: RebuildTarget, output_name: str) -> list[str]
 
 def default_compdb_path(root: Path) -> Path:
     return root / "compile_commands.json"
+
+
+def rebuild_target(policy: CommandPolicy, target: RebuildTarget, output_name: str) -> CommandResult:
+    argv = rewrite_for_sanitizers(target, output_name)
+    build_dir = Path(target.directory)
+    if not build_dir.is_absolute():
+        build_dir = policy.workspace_root / build_dir
+    if not build_dir.exists():
+        build_dir = policy.workspace_root
+    return policy.run(argv, cwd=build_dir)
