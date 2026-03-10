@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .config import AgentConfig
 from .compdb import CompileDatabase
+from .pipeline import rebuild_and_verify
 from .reporting import render_markdown, write_report
 from .rebuild import default_compdb_path, extract_targets, rebuild_target, rewrite_for_sanitizers
 from .sanitizers import build_single_c_file
@@ -48,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--output-name", default="sanitized-target", help="output binary name")
     rebuild.add_argument("--compdb", type=Path, help="optional compile_commands.json path")
     rebuild.add_argument("--config", type=Path, help="optional JSON config path")
+
+    rv = subparsers.add_parser("rebuild-verify", help="rebuild a target and run verification plan")
+    rv.add_argument("--root", type=Path, required=True, help="project root")
+    rv.add_argument("--index", type=int, default=1, help="1-based target index from rebuild-plan")
+    rv.add_argument("--output-name", default="sanitized-target", help="output binary name")
+    rv.add_argument("--compdb", type=Path, help="optional compile_commands.json path")
+    rv.add_argument("--plan", type=Path, help="optional verification plan path")
+    rv.add_argument("--config", type=Path, help="optional JSON config path")
 
     return parser
 
@@ -142,6 +151,32 @@ def main() -> int:
         if result.stderr:
             print(result.stderr, end="")
         return result.returncode
+
+    if args.command == "rebuild-verify":
+        config = AgentConfig.load(args.config)
+        result = rebuild_and_verify(
+            root=args.root,
+            config=config,
+            target_index=args.index,
+            output_name=args.output_name,
+            compdb_path=args.compdb,
+            plan_path=args.plan,
+        )
+        print(f"rebuild rc={result.rebuild.returncode}")
+        if result.rebuild.stdout:
+            print(result.rebuild.stdout, end="")
+        if result.rebuild.stderr:
+            print(result.rebuild.stderr, end="")
+        if result.verification is not None:
+            print(
+                f"verify rc={result.verification.returncode} "
+                f"sanitizer_signal={str(result.verification.sanitizer_signal).lower()}"
+            )
+            if result.verification.stdout:
+                print(result.verification.stdout, end="")
+            if result.verification.stderr:
+                print(result.verification.stderr, end="")
+        return result.rebuild.returncode
 
     parser.error("unknown command")
     return 2
