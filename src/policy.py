@@ -76,20 +76,31 @@ class CommandPolicy:
 
     def run(self, argv: Sequence[str], cwd: Path | None = None) -> CommandResult:
         safe_argv, safe_cwd = self.validate(argv, cwd)
-        proc = subprocess.run(
-            safe_argv,
-            cwd=safe_cwd,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            check=False,
-        )
-        return CommandResult(
-            argv=safe_argv,
-            returncode=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
-        )
+        try:
+            proc = subprocess.run(
+                safe_argv,
+                cwd=safe_cwd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+            return CommandResult(
+                argv=safe_argv,
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            stderr += f"\n[policy-timeout] command exceeded {self.timeout_seconds}s\n"
+            return CommandResult(
+                argv=safe_argv,
+                returncode=124,
+                stdout=stdout,
+                stderr=stderr,
+            )
 
     def run_shell_like(self, command: str, cwd: Path | None = None) -> CommandResult:
         return self.run(shlex.split(command), cwd=cwd)

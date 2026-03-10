@@ -6,9 +6,11 @@ from typing import Any
 
 from .compdb import CompileDatabase
 from .config import AgentConfig
+from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
 from .reporting import render_markdown
 from .scanner import ScanResult, scan_project
+from .verification import VerificationResult, run_binary
 
 
 @dataclass
@@ -17,6 +19,7 @@ class WorkflowResult:
     command_logs: list[CommandResult]
     report_markdown: str
     compile_db_summary: dict[str, Any] | None = None
+    verification: VerificationResult | None = None
 
 
 class AuditWorkflow:
@@ -46,9 +49,27 @@ class AuditWorkflow:
             report += f"- Directories: `{', '.join(compile_db_summary['directories'])}`\n"
             report += f"- Files: `{', '.join(compile_db_summary['files'])}`\n"
 
+        verification = None
+        plan_path = self.root / "verification-plan.json"
+        if plan_path.exists():
+            plan = VerificationPlan.load(plan_path)
+            binary_path = self.root / plan.binary
+            if binary_path.exists():
+                verification = run_binary(self.policy, binary_path, args=plan.args)
+                report += "\n## Verification\n\n"
+                report += f"- Binary: `{plan.binary}`\n"
+                report += f"- Return code: **{verification.returncode}**\n"
+                report += f"- Verification signal: **{str(verification.sanitizer_signal).lower()}**\n"
+                if verification.stderr.strip():
+                    snippet = verification.stderr.strip().splitlines()[0]
+                    report += f"- Stderr head: `{snippet}`\n"
+                if verification.returncode == 124:
+                    report += "- Note: verification command hit the policy timeout\n"
+
         return WorkflowResult(
             scan=scan,
             command_logs=command_logs,
             report_markdown=report,
             compile_db_summary=compile_db_summary,
+            verification=verification,
         )
