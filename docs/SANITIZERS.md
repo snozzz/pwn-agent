@@ -4,7 +4,7 @@ The MVP now includes a basic sanitizer build helper for single-file C targets.
 
 ## Current scope
 
-- `clang`
+- compiler auto-detection: `clang`, `gcc`, `cc`
 - `-fsanitize=address,undefined`
 - single-file compilation inside the workspace
 

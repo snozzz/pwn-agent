@@ -22,6 +22,9 @@ DEFAULT_ALLOWLIST = {
     "ninja",
     "clang",
     "clang++",
+    "gcc",
+    "g++",
+    "cc",
     "clang-tidy",
     "cppcheck",
 }
