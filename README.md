@@ -35,6 +35,7 @@ The first MVP focuses on:
 ```bash
 python3 -m src.main scan --root /path/to/project --report out/report.md
 python3 -m src.main audit --root /path/to/project --report out/audit.md
+python3 -m src.main audit --root /path/to/project --report out/audit.md --config pwn-agent.json
 ```
 
 ## Safety model

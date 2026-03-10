@@ -1,0 +1,21 @@
+{
+  "allowlist": [
+    "ls",
+    "find",
+    "rg",
+    "grep",
+    "file",
+    "strings",
+    "nm",
+    "objdump",
+    "readelf",
+    "cmake",
+    "make",
+    "ninja",
+    "clang",
+    "clang++",
+    "clang-tidy",
+    "cppcheck"
+  ],
+  "timeout_seconds": 20
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .config import AgentConfig
 from .reporting import render_markdown, write_report
 from .scanner import scan_project
 from .workflow import AuditWorkflow
@@ -19,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit", help="run the constrained audit workflow")
     audit.add_argument("--root", type=Path, required=True, help="project root to audit")
     audit.add_argument("--report", type=Path, required=True, help="markdown report output path")
+    audit.add_argument("--config", type=Path, help="optional JSON config path")
 
     return parser
 
@@ -35,7 +37,8 @@ def main() -> int:
         return 0
 
     if args.command == "audit":
-        workflow = AuditWorkflow(args.root)
+        config = AgentConfig.load(args.config)
+        workflow = AuditWorkflow(args.root, config=config)
         result = workflow.run()
         write_report(args.report, result.report_markdown)
         print(
