@@ -45,6 +45,7 @@ PY
 python3 -m src.main audit --root examples --report out/audit.md --config pwn-agent.json
 # if examples/verification-plan.json exists, audit will append verification results
 # if compile_commands.json exists, audit will also append rebuild+verify pipeline evidence
+# audit will also list detected input surfaces
 python3 -m src.main rebuild-plan --root examples
 python3 -m src.main rebuild-target --root examples --index 1 --output-name vuln_demo_rebuilt_asan --config pwn-agent.json
 python3 -m src.main rebuild-verify --root examples --index 1 --output-name vuln_demo_pipeline_asan --config pwn-agent.json

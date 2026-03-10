@@ -11,6 +11,7 @@ from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
 from .reporting import render_markdown
 from .scanner import ScanResult, scan_project
+from .surfaces import InputSurface, detect_input_surfaces
 from .trace import AuditTrace, new_trace
 from .verification import VerificationResult, run_binary
 
@@ -21,6 +22,7 @@ class WorkflowResult:
     command_logs: list[CommandResult]
     report_markdown: str
     trace: AuditTrace
+    input_surfaces: list[InputSurface]
     compile_db_summary: dict[str, Any] | None = None
     verification: VerificationResult | None = None
     rebuild_verify: RebuildVerifyResult | None = None
@@ -44,6 +46,8 @@ class AuditWorkflow:
         trace.add("project-discovery", "ok", command="find . -maxdepth 2 -type f", returncode=discovery.returncode)
         scan = scan_project(self.root)
         trace.add("source-scan", "ok", files_scanned=scan.files_scanned, findings=len(scan.findings))
+        input_surfaces = detect_input_surfaces(self.root)
+        trace.add("input-surface-detection", "ok", surfaces=len(input_surfaces))
 
         compile_db_summary = None
         compdb_path = self.root / "compile_commands.json"
@@ -97,6 +101,11 @@ class AuditWorkflow:
             or (rebuild_verify is not None and rebuild_verify.verification is not None and rebuild_verify.verification.sanitizer_signal)
         )
         report = render_markdown(scan, verified_signal=verified_signal)
+        if input_surfaces:
+            report += "\n## Input Surfaces\n\n"
+            for surface in input_surfaces[:20]:
+                report += f"- `{surface.category}` in `{surface.file_path}:{surface.line_number}` → `{surface.line_text}`\n"
+
         if compile_db_summary:
             report += "\n## Compile Database\n\n"
             report += f"- Entries: **{compile_db_summary['entries']}**\n"
@@ -132,6 +141,7 @@ class AuditWorkflow:
             command_logs=command_logs,
             report_markdown=report,
             trace=trace,
+            input_surfaces=input_surfaces,
             compile_db_summary=compile_db_summary,
             verification=verification,
             rebuild_verify=rebuild_verify,
