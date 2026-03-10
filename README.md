@@ -34,8 +34,18 @@ The first MVP focuses on:
 
 ```bash
 python3 -m src.main scan --root /path/to/project --report out/report.md
+python3 -m src.main audit --root /path/to/project --report out/audit.md
 ```
 
 ## Safety model
+
+The command-execution layer is intentionally constrained:
+
+- workspace-bounded cwd
+- explicit command allowlist
+- fixed timeout for command execution
+- no shell passthrough by default
+
+## Current status
 
 This MVP is intended for defensive security review on local codebases with constrained command execution.
