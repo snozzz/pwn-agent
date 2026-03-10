@@ -6,6 +6,7 @@ from typing import Any
 
 from .compdb import CompileDatabase
 from .config import AgentConfig
+from .hotspots import FileHotspot, rank_hotspots
 from .pipeline import RebuildVerifyResult, rebuild_and_verify
 from .planio import VerificationPlan
 from .policy import CommandPolicy, CommandResult
@@ -23,6 +24,7 @@ class WorkflowResult:
     report_markdown: str
     trace: AuditTrace
     input_surfaces: list[InputSurface]
+    hotspots: list[FileHotspot]
     compile_db_summary: dict[str, Any] | None = None
     verification: VerificationResult | None = None
     rebuild_verify: RebuildVerifyResult | None = None
@@ -100,7 +102,17 @@ class AuditWorkflow:
             (verification is not None and verification.sanitizer_signal)
             or (rebuild_verify is not None and rebuild_verify.verification is not None and rebuild_verify.verification.sanitizer_signal)
         )
+        hotspots = rank_hotspots(scan, input_surfaces, verified_signal=verified_signal)
+        trace.add("hotspot-ranking", "ok", hotspots=len(hotspots), top=(hotspots[0].file_path if hotspots else "none"))
         report = render_markdown(scan, verified_signal=verified_signal)
+        if hotspots:
+            report += "\n## Risk Hotspots\n\n"
+            for hotspot in hotspots[:10]:
+                report += (
+                    f"- `{hotspot.file_path}` score=**{hotspot.score}** findings={hotspot.findings} "
+                    f"surfaces={hotspot.surfaces} verified={str(hotspot.verified).lower()}\n"
+                )
+
         if input_surfaces:
             report += "\n## Input Surfaces\n\n"
             for surface in input_surfaces[:20]:
@@ -142,6 +154,7 @@ class AuditWorkflow:
             report_markdown=report,
             trace=trace,
             input_surfaces=input_surfaces,
+            hotspots=hotspots,
             compile_db_summary=compile_db_summary,
             verification=verification,
             rebuild_verify=rebuild_verify,
