@@ -8,6 +8,7 @@ The MVP now includes a compile-database-driven rebuild planner.
 - extract translation-unit targets
 - rewrite build argv to inject sanitizer flags
 - prepare for multi-file target rebuilding
+- audit/export summaries now report whether rebuild paths are ready, partially blocked, or failed
 
 ## Why it matters
 

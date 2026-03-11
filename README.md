@@ -71,3 +71,5 @@ It now also supports ingesting `compile_commands.json`, surfacing a compile data
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
 and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
 A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop.
+The audit export now includes concise file/function rollups plus execution-readiness data, and the plan output now marks
+which actions are `context`, `ready`, or `blocked`, along with prerequisites and suggested CLI when a step is executable.

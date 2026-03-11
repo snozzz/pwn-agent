@@ -8,9 +8,17 @@ from typing import Any
 
 @dataclass
 class PlannedAction:
+    id: str
     kind: str
+    title: str
+    status: str
     priority: int
     rationale: str
+    depends_on: list[str]
+    blocked_by: list[str]
+    prerequisites: list[dict[str, Any]]
+    suggested_cli: list[str] | None
+    expected_outcome: str | None
     params: dict[str, Any]
 
 
@@ -19,6 +27,7 @@ class OrchestrationPlan:
     assessment: str
     top_risks: list[str]
     evidence_used: list[str]
+    readiness: dict[str, Any]
     next_actions: list[PlannedAction]
 
     def to_dict(self) -> dict[str, Any]:
@@ -26,6 +35,7 @@ class OrchestrationPlan:
             "assessment": self.assessment,
             "top_risks": self.top_risks,
             "evidence_used": self.evidence_used,
+            "readiness": self.readiness,
             "next_actions": [asdict(action) for action in self.next_actions],
         }
 
@@ -40,8 +50,12 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
     file_hotspots = summary.get("file_hotspots", [])
     function_hotspots = summary.get("function_hotspots", [])
     input_surfaces = summary.get("input_surfaces", [])
+    file_rollups = summary.get("file_rollups", [])
+    function_rollups = summary.get("function_rollups", [])
     verification = summary.get("verification")
     rebuild_verify = summary.get("rebuild_verify")
+    readiness = summary.get("execution_readiness", {})
+    root = summary.get("root", ".")
 
     verified_signal = bool(scan_summary.get("verified_signal"))
     top_risks = []
@@ -64,18 +78,47 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
         evidence_used.append("function hotspot ranking available")
     if input_surfaces:
         evidence_used.append("input surface detection available")
+    if readiness.get("missing_prerequisites"):
+        evidence_used.append("missing prerequisites tracked for execution paths")
 
     if function_hotspots:
         top_function = function_hotspots[0]
         actions.append(
             PlannedAction(
+                id="focus-function-1",
                 kind="focus_functions",
+                title=f"Inspect highest-ranked function hotspot: {top_function['function_name']}",
+                status="context",
                 priority=100,
                 rationale="highest-ranked function hotspot should be inspected first",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="identify the local code path most likely to explain current findings",
                 params={
                     "file_path": top_function["file_path"],
                     "function_name": top_function["function_name"],
+                    "score": top_function["score"],
                 },
+            )
+        )
+    elif function_rollups:
+        top_function = function_rollups[0]
+        actions.append(
+            PlannedAction(
+                id="focus-function-rollup-1",
+                kind="focus_functions",
+                title=f"Inspect top function rollup: {top_function['function_name']}",
+                status="context",
+                priority=95,
+                rationale="function-level aggregation exists even when hotspot ranking is sparse",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="map clustered findings and surfaces to one function scope",
+                params=top_function,
             )
         )
 
@@ -83,10 +126,36 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
         top_file = file_hotspots[0]
         actions.append(
             PlannedAction(
+                id="inspect-file-1",
                 kind="inspect_file",
+                title=f"Inspect highest-ranked file hotspot: {top_file['file_path']}",
+                status="context",
                 priority=90,
                 rationale="top file hotspot concentrates current findings and surfaces",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="confirm whether the file contains the shortest path to a fix or proof",
                 params={"file_path": top_file["file_path"]},
+            )
+        )
+    elif file_rollups:
+        top_file = file_rollups[0]
+        actions.append(
+            PlannedAction(
+                id="inspect-file-rollup-1",
+                kind="inspect_file",
+                title=f"Inspect top file rollup: {top_file['file_path']}",
+                status="context",
+                priority=85,
+                rationale="file-level aggregation captures combined finding and surface density",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="confirm the file-level concentration of suspicious behavior",
+                params=top_file,
             )
         )
 
@@ -94,9 +163,17 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
         surface = input_surfaces[0]
         actions.append(
             PlannedAction(
+                id="trace-input-1",
                 kind="trace_input_surface",
+                title=f"Trace top input surface from {surface['file_path']}:{surface['line_number']}",
+                status="context",
                 priority=80,
                 rationale="input entrypoints are the best place to start dataflow review",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="connect attacker-controlled input to the finding cluster",
                 params={
                     "file_path": surface["file_path"],
                     "line_number": surface["line_number"],
@@ -106,25 +183,137 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
             )
         )
 
+    if readiness.get("verification_state") == "ready":
+        actions.append(
+            PlannedAction(
+                id="verify-existing-binary",
+                kind="verify_binary",
+                title="Run the configured verification binary",
+                status="ready",
+                priority=75,
+                rationale="verification inputs are already configured and the binary is present",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=_prerequisites(
+                    ("verification-plan.json", readiness.get("has_verification_plan", False), "argv is available"),
+                    (
+                        readiness.get("verification_binary") or "verification binary",
+                        readiness.get("verification_binary_present", False),
+                        "binary exists in the workspace",
+                    ),
+                ),
+                suggested_cli=[
+                    "python3",
+                    "-m",
+                    "src.main",
+                    "verify-run",
+                    "--root",
+                    str(root),
+                    "--binary",
+                    str(Path(root) / str(readiness.get("verification_binary"))),
+                ],
+                expected_outcome="capture runtime evidence before rebuilding anything",
+                params={"binary": readiness.get("verification_binary")},
+            )
+        )
+
     if summary.get("compile_database") and not rebuild_verify:
         actions.append(
             PlannedAction(
+                id="run-rebuild-verify",
                 kind="run_rebuild_verify",
+                title="Rebuild target 1 with sanitizers and execute the verification plan",
+                status="ready" if readiness.get("has_verification_plan") else "blocked",
                 priority=70,
                 rationale="compile database exists but rebuild verification evidence is missing",
+                depends_on=[],
+                blocked_by=[] if readiness.get("has_verification_plan") else ["verification-plan.json missing"],
+                prerequisites=_prerequisites(
+                    ("compile_commands.json", readiness.get("has_compile_database", False), "rebuild target metadata available"),
+                    ("verification-plan.json", readiness.get("has_verification_plan", False), "verification args available"),
+                ),
+                suggested_cli=[
+                    "python3",
+                    "-m",
+                    "src.main",
+                    "rebuild-verify",
+                    "--root",
+                    str(root),
+                    "--index",
+                    "1",
+                    "--output-name",
+                    "planned-sanitized-target",
+                ]
+                if readiness.get("has_compile_database")
+                else None,
+                expected_outcome="produce a sanitized binary and runtime signal if the bug is reproducible",
                 params={"target_index": 1, "output_name": "planned-sanitized-target"},
+            )
+        )
+
+    if rebuild_verify and rebuild_verify.get("rebuild", {}).get("returncode") not in (None, 0):
+        actions.append(
+            PlannedAction(
+                id="inspect-rebuild-failure",
+                kind="inspect_rebuild_failure",
+                title="Inspect the sanitizer rebuild failure before retrying verification",
+                status="ready",
+                priority=65,
+                rationale="rebuild failed, so the verification path is blocked on build issues",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=_prerequisites(("compile_commands.json", True, "build metadata already loaded")),
+                suggested_cli=[
+                    "python3",
+                    "-m",
+                    "src.main",
+                    "rebuild-plan",
+                    "--root",
+                    str(root),
+                ],
+                expected_outcome="identify the failing target or unsupported build flags",
+                params={"stderr_head": rebuild_verify.get("rebuild", {}).get("stderr_head")},
             )
         )
 
     if verified_signal:
         actions.append(
             PlannedAction(
+                id="explain-root-cause",
                 kind="explain_root_cause",
+                title="Summarize the likely root cause from verified evidence",
+                status="ready",
                 priority=60,
                 rationale="verification evidence exists; summarize likely root cause before deeper expansion",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="turn sanitizer output and static findings into a concise bug hypothesis",
                 params={
                     "max_findings": 3,
                 },
+            )
+        )
+
+    for index, blocked in enumerate(readiness.get("blocked_actions", []), start=1):
+        actions.append(
+            PlannedAction(
+                id=f"blocked-{blocked.get('kind', 'action')}-{index}",
+                kind=blocked.get("kind", "blocked_action"),
+                title=f"Blocked: {blocked.get('kind', 'action')}",
+                status="blocked",
+                priority=40 - index,
+                rationale="required execution path is not runnable until missing prerequisites are satisfied",
+                depends_on=[],
+                blocked_by=list(blocked.get("missing", [])),
+                prerequisites=[
+                    {"label": item, "present": False, "detail": "missing prerequisite"}
+                    for item in blocked.get("missing", [])
+                ],
+                suggested_cli=None,
+                expected_outcome="unblock a runnable verification or rebuild step",
+                params=blocked,
             )
         )
 
@@ -133,6 +322,14 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
         assessment=assessment,
         top_risks=top_risks,
         evidence_used=evidence_used,
+        readiness={
+            "ready_actions": sum(1 for action in actions if action.status == "ready"),
+            "blocked_actions": sum(1 for action in actions if action.status == "blocked"),
+            "context_actions": sum(1 for action in actions if action.status == "context"),
+            "missing_prerequisites": readiness.get("missing_prerequisites", []),
+            "verification_state": readiness.get("verification_state"),
+            "rebuild_state": readiness.get("rebuild_state"),
+        },
         next_actions=actions,
     )
 
@@ -144,6 +341,18 @@ def write_plan(path: Path, plan: OrchestrationPlan) -> None:
 
 def render_plan_markdown(plan: OrchestrationPlan) -> str:
     lines = ["# Orchestration Plan", "", f"- Assessment: {plan.assessment}", ""]
+    lines.extend(["## Readiness", ""])
+    lines.append(f"- Ready actions: {plan.readiness.get('ready_actions', 0)}")
+    lines.append(f"- Blocked actions: {plan.readiness.get('blocked_actions', 0)}")
+    lines.append(f"- Context actions: {plan.readiness.get('context_actions', 0)}")
+    if plan.readiness.get("verification_state"):
+        lines.append(f"- Verification state: {plan.readiness['verification_state']}")
+    if plan.readiness.get("rebuild_state"):
+        lines.append(f"- Rebuild state: {plan.readiness['rebuild_state']}")
+    missing = plan.readiness.get("missing_prerequisites", [])
+    if missing:
+        lines.append(f"- Missing prerequisites: {', '.join(missing)}")
+    lines.append("")
     lines.append("## Top Risks")
     lines.append("")
     if plan.top_risks:
@@ -158,7 +367,20 @@ def render_plan_markdown(plan: OrchestrationPlan) -> str:
     lines.extend(["", "## Next Actions", ""])
     if plan.next_actions:
         for action in plan.next_actions:
-            lines.append(f"- [{action.priority}] {action.kind}: {action.rationale}")
+            lines.append(f"- [{action.priority}] [{action.status}] {action.title}")
+            lines.append(f"  kind: `{action.kind}`")
+            lines.append(f"  rationale: {action.rationale}")
+            if action.blocked_by:
+                lines.append(f"  blocked-by: {', '.join(action.blocked_by)}")
+            if action.prerequisites:
+                formatted = ", ".join(
+                    f"{item['label']}={'yes' if item['present'] else 'no'}" for item in action.prerequisites
+                )
+                lines.append(f"  prerequisites: {formatted}")
+            if action.suggested_cli:
+                lines.append(f"  command: `{_shell_join(action.suggested_cli)}`")
+            if action.expected_outcome:
+                lines.append(f"  outcome: {action.expected_outcome}")
     else:
         lines.append("- none")
     return "\n".join(lines) + "\n"
@@ -182,3 +404,17 @@ def _build_assessment(
     if file_hotspots:
         return f"heuristic risk cluster present; start from {file_hotspots[0]['file_path']}"
     return "heuristic findings present; inspect top findings first"
+
+
+def _prerequisites(*items: tuple[str, bool, str]) -> list[dict[str, Any]]:
+    return [{"label": label, "present": present, "detail": detail} for label, present, detail in items]
+
+
+def _shell_join(argv: list[str]) -> str:
+    quoted: list[str] = []
+    for token in argv:
+        if not token or any(char.isspace() for char in token):
+            quoted.append(json.dumps(token))
+        else:
+            quoted.append(token)
+    return " ".join(quoted)

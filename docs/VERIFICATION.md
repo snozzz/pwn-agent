@@ -7,6 +7,7 @@ The MVP now includes a binary verification helper that can run a local instrumen
 - local binary execution inside workspace bounds
 - simple argv injection
 - detection of common AddressSanitizer / UBSan markers
+- audit/export summaries now distinguish `ready`, `blocked-missing-binary`, and completed verification states
 
 ## Why this matters
 

@@ -63,7 +63,12 @@ class AuditWorkflow:
             compdb = CompileDatabase.load(compdb_path)
             compile_db_summary = compdb.summary()
             compile_db_summary["targets"] = len(extract_targets(compdb))
-            trace.add("compile-db", "found", entries=compile_db_summary["entries"])
+            trace.add(
+                "compile-db",
+                "found",
+                entries=compile_db_summary["entries"],
+                targets=compile_db_summary["targets"],
+            )
         else:
             trace.add("compile-db", "missing")
 
@@ -75,6 +80,7 @@ class AuditWorkflow:
             binary_path = self.root / plan.binary
             trace.add("verification-plan", "found", binary=plan.binary, argc=len(plan.args))
             if binary_path.exists():
+                trace.add("verification-binary", "found", binary=plan.binary)
                 verification = run_binary(self.policy, binary_path, args=plan.args)
                 trace.add(
                     "verification-run",
@@ -84,12 +90,14 @@ class AuditWorkflow:
                     sanitizer_signal=verification.sanitizer_signal,
                 )
             else:
+                trace.add("verification-binary", "missing", binary=plan.binary)
                 trace.add("verification-run", "skipped", reason="binary missing", binary=plan.binary)
         else:
             trace.add("verification-plan", "missing")
 
         compdb_path = self.root / "compile_commands.json"
         if compdb_path.exists():
+            trace.add("rebuild-target-selection", "ready", target_index=1)
             rebuild_verify = rebuild_and_verify(
                 root=self.root,
                 config=self.config,
@@ -98,12 +106,24 @@ class AuditWorkflow:
                 compdb_path=compdb_path,
                 plan_path=plan_path if plan_path.exists() else None,
             )
+            rebuild_status = "ok"
+            rebuild_reason = None
+            if rebuild_verify.rebuild.returncode != 0:
+                rebuild_status = "failed"
+                rebuild_reason = "rebuild command failed"
+            elif not plan_path.exists():
+                rebuild_status = "partial"
+                rebuild_reason = "verification plan missing"
+            elif rebuild_verify.verification is None:
+                rebuild_status = "partial"
+                rebuild_reason = "verification did not execute"
             trace.add(
                 "rebuild-verify",
-                "ok",
+                rebuild_status,
                 rebuild_returncode=rebuild_verify.rebuild.returncode,
                 verify_returncode=(rebuild_verify.verification.returncode if rebuild_verify.verification is not None else "none"),
                 verify_signal=(rebuild_verify.verification.sanitizer_signal if rebuild_verify.verification is not None else False),
+                reason=rebuild_reason,
             )
 
         verified_signal = bool(
