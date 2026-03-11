@@ -65,6 +65,7 @@ Current behavior is intentionally narrow:
 - `depends_on` is respected during selection, so rebuild+verify can stay gated behind target enumeration/rebuild steps
 - `--dry-run` validates and reports what would execute without actually running it
 - each run emits a structured execution summary for downstream tooling
+- execution summaries now include runnable/deferred action inventory so a controller can see what remains blocked only by ordering
 
 ## Why this matters
 

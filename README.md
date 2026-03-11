@@ -72,7 +72,7 @@ This MVP is intended for defensive security review on local codebases with const
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
 and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
-A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop.
+A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop, and `run-plan` now emits a richer execution summary with runnable/deferred action inventory.
 The audit export now includes concise file/function rollups plus execution-readiness data, and the plan output now marks
 which actions are `context`, `ready`, or `blocked`, grouped into explicit `triage`, `execution`, and `synthesis` phases.
 Runnable execution steps are preserved even after a sanitizer signal already exists, so downstream loops can still replay

@@ -44,6 +44,9 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.executed, 0)
             self.assertEqual(summary.stopped_reason, "dry-run")
             self.assertEqual(summary.selected_action_ids, ["verify-existing-binary"])
+            self.assertEqual(summary.runnable_action_ids, ["verify-existing-binary"])
+            self.assertEqual(summary.deferred_action_ids, [])
+            self.assertEqual(summary.status_counts["dry-run"], 1)
             self.assertEqual(summary.records[0].status, "dry-run")
             self.assertEqual(summary.records[0].phase, "execution")
 
@@ -94,6 +97,7 @@ class ExecutorTests(unittest.TestCase):
 
             self.assertEqual(summary.executed, 1)
             self.assertEqual(summary.stopped_reason, "completed")
+            self.assertEqual(summary.status_counts["ok"], 1)
             self.assertEqual(summary.records[0].status, "ok")
             self.assertEqual(summary.records[0].returncode, 0)
             self.assertIn("targets=1", summary.records[0].stdout)
@@ -200,6 +204,8 @@ class ExecutorTests(unittest.TestCase):
             summary = execute_plan(plan_path, max_actions=2, dry_run=True)
 
             self.assertEqual(summary.selected_action_ids, ["rebuild-target-1", "run-rebuild-verify"])
+            self.assertEqual(summary.runnable_action_ids, ["run-rebuild-verify", "rebuild-target-1"])
+            self.assertEqual(summary.deferred_action_ids, [])
 
     def test_execute_plan_raises_for_missing_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
