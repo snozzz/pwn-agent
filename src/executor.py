@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import hashlib
 import json
 import subprocess
 from typing import Any
@@ -44,14 +45,20 @@ class ExecutionTransition:
 @dataclass
 class ExecutionState:
     plan_path: str
+    plan_schema_version: int | None
+    plan_fingerprint: str | None
     action_states: dict[str, str]
+    action_signatures: dict[str, str]
     completed_action_ids: list[str]
     history: list[ExecutionTransition]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "plan_path": self.plan_path,
+            "plan_schema_version": self.plan_schema_version,
+            "plan_fingerprint": self.plan_fingerprint,
             "action_states": dict(sorted(self.action_states.items())),
+            "action_signatures": dict(sorted(self.action_signatures.items())),
             "completed_action_ids": list(self.completed_action_ids),
             "history": [asdict(entry) for entry in self.history],
         }
@@ -60,10 +67,15 @@ class ExecutionState:
 @dataclass
 class ExecutionSummary:
     plan_path: str
+    plan_schema_version: int | None
+    plan_fingerprint: str | None
     executed: int
     selected_action_ids: list[str]
     completed_action_ids: list[str]
     resumed_completed_action_ids: list[str]
+    stale_completed_action_ids: list[str]
+    new_action_ids: list[str]
+    changed_action_ids: list[str]
     stopped_reason: str
     runnable_action_ids: list[str]
     deferred_action_ids: list[str]
@@ -76,15 +88,24 @@ class ExecutionSummary:
     transitions: list[ExecutionTransition]
     state_path: str | None
     resumed_from_state: bool
+    plan_changed: bool
+    previous_plan_path: str | None
+    previous_plan_schema_version: int | None
+    previous_plan_fingerprint: str | None
     records: list[ExecutionRecord]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "plan_path": self.plan_path,
+            "plan_schema_version": self.plan_schema_version,
+            "plan_fingerprint": self.plan_fingerprint,
             "executed": self.executed,
             "selected_action_ids": self.selected_action_ids,
             "completed_action_ids": self.completed_action_ids,
             "resumed_completed_action_ids": self.resumed_completed_action_ids,
+            "stale_completed_action_ids": self.stale_completed_action_ids,
+            "new_action_ids": self.new_action_ids,
+            "changed_action_ids": self.changed_action_ids,
             "stopped_reason": self.stopped_reason,
             "runnable_action_ids": self.runnable_action_ids,
             "deferred_action_ids": self.deferred_action_ids,
@@ -97,12 +118,28 @@ class ExecutionSummary:
             "transitions": [asdict(entry) for entry in self.transitions],
             "state_path": self.state_path,
             "resumed_from_state": self.resumed_from_state,
+            "plan_changed": self.plan_changed,
+            "previous_plan_path": self.previous_plan_path,
+            "previous_plan_schema_version": self.previous_plan_schema_version,
+            "previous_plan_fingerprint": self.previous_plan_fingerprint,
             "records": [asdict(record) for record in self.records],
         }
 
 
 class ExecutorError(RuntimeError):
     pass
+
+
+@dataclass
+class ReconciliationResult:
+    plan_changed: bool
+    previous_plan_path: str | None
+    previous_plan_schema_version: int | None
+    previous_plan_fingerprint: str | None
+    carried_completed_action_ids: list[str]
+    stale_completed_action_ids: list[str]
+    new_action_ids: list[str]
+    changed_action_ids: list[str]
 
 
 def execute_plan(
@@ -120,8 +157,23 @@ def execute_plan(
 
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     actions = list(plan.get("next_actions", []))
-    state, resumed_from_state = _load_state(state_path, plan_path=plan_path, actions=actions)
-    resumed_completed_ids = set(state.completed_action_ids)
+    plan_schema_version = _parse_plan_schema_version(plan)
+    plan_fingerprint = plan.get("plan_fingerprint")
+    state, resumed_from_state = _load_state(
+        state_path,
+        plan_path=plan_path,
+        actions=actions,
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
+    )
+    reconciliation = _reconcile_state_with_plan(
+        state,
+        plan_path=plan_path,
+        actions=actions,
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
+    )
+    resumed_completed_ids = set(reconciliation.carried_completed_action_ids)
 
     filtered_actions = _filter_runnable_actions(
         actions,
@@ -214,10 +266,15 @@ def execute_plan(
     action_state_counts = _count_states(state.action_states)
     return ExecutionSummary(
         plan_path=str(plan_path),
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
         executed=sum(1 for record in records if record.status in {"ok", "failed"}),
         selected_action_ids=[action["id"] for action in selected],
         completed_action_ids=[action["id"] for action in selected if action["id"] in completed_ids],
         resumed_completed_action_ids=sorted(resumed_completed_ids),
+        stale_completed_action_ids=reconciliation.stale_completed_action_ids,
+        new_action_ids=reconciliation.new_action_ids,
+        changed_action_ids=reconciliation.changed_action_ids,
         stopped_reason=stopped_reason,
         runnable_action_ids=runnable_ids,
         deferred_action_ids=deferred_ids,
@@ -230,6 +287,10 @@ def execute_plan(
         transitions=transitions,
         state_path=(str(state_path) if state_path is not None else None),
         resumed_from_state=resumed_from_state,
+        plan_changed=reconciliation.plan_changed,
+        previous_plan_path=reconciliation.previous_plan_path,
+        previous_plan_schema_version=reconciliation.previous_plan_schema_version,
+        previous_plan_fingerprint=reconciliation.previous_plan_fingerprint,
         records=records,
     )
 
@@ -247,17 +308,34 @@ def write_execution_state(path: Path, state: ExecutionState) -> None:
 def render_execution_markdown(summary: ExecutionSummary) -> str:
     lines = ["# Plan Execution", ""]
     lines.append(f"- Plan: `{summary.plan_path}`")
+    if summary.plan_schema_version is not None:
+        lines.append(f"- Plan schema version: {summary.plan_schema_version}")
+    if summary.plan_fingerprint:
+        lines.append(f"- Plan fingerprint: `{summary.plan_fingerprint}`")
     lines.append(f"- Executed: {summary.executed}")
     lines.append(f"- Stopped reason: {summary.stopped_reason}")
     lines.append(f"- Resumed from state: {str(summary.resumed_from_state).lower()}")
+    lines.append(f"- Plan changed since prior state: {str(summary.plan_changed).lower()}")
     if summary.state_path:
         lines.append(f"- State file: `{summary.state_path}`")
+    if summary.previous_plan_path:
+        lines.append(f"- Previous plan: `{summary.previous_plan_path}`")
+    if summary.previous_plan_schema_version is not None:
+        lines.append(f"- Previous plan schema version: {summary.previous_plan_schema_version}")
+    if summary.previous_plan_fingerprint:
+        lines.append(f"- Previous plan fingerprint: `{summary.previous_plan_fingerprint}`")
     if summary.selected_action_ids:
         lines.append(f"- Selected actions: {', '.join(summary.selected_action_ids)}")
     if summary.completed_action_ids:
         lines.append(f"- Completed actions: {', '.join(summary.completed_action_ids)}")
     if summary.resumed_completed_action_ids:
         lines.append(f"- Previously completed actions: {', '.join(summary.resumed_completed_action_ids)}")
+    if summary.stale_completed_action_ids:
+        lines.append(f"- Stale completed actions: {', '.join(summary.stale_completed_action_ids)}")
+    if summary.new_action_ids:
+        lines.append(f"- New actions since prior state: {', '.join(summary.new_action_ids)}")
+    if summary.changed_action_ids:
+        lines.append(f"- Changed actions since prior state: {', '.join(summary.changed_action_ids)}")
     if summary.runnable_action_ids:
         lines.append(f"- Runnable actions: {', '.join(summary.runnable_action_ids)}")
     if summary.deferred_action_ids:
@@ -312,26 +390,39 @@ def _load_state(
     *,
     plan_path: Path,
     actions: list[dict[str, Any]],
+    plan_schema_version: int | None,
+    plan_fingerprint: str | None,
 ) -> tuple[ExecutionState, bool]:
     if state_path is None or not state_path.exists():
-        return _initial_state(plan_path, actions), False
+        return _initial_state(plan_path, actions, plan_schema_version=plan_schema_version, plan_fingerprint=plan_fingerprint), False
 
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     history = [ExecutionTransition(**entry) for entry in payload.get("history", [])]
     state = ExecutionState(
         plan_path=payload.get("plan_path", str(plan_path)),
+        plan_schema_version=payload.get("plan_schema_version"),
+        plan_fingerprint=payload.get("plan_fingerprint"),
         action_states=dict(payload.get("action_states", {})),
+        action_signatures=dict(payload.get("action_signatures", {})),
         completed_action_ids=list(payload.get("completed_action_ids", [])),
         history=history,
     )
-    _merge_missing_actions(state, actions)
     return state, True
 
 
-def _initial_state(plan_path: Path, actions: list[dict[str, Any]]) -> ExecutionState:
+def _initial_state(
+    plan_path: Path,
+    actions: list[dict[str, Any]],
+    *,
+    plan_schema_version: int | None,
+    plan_fingerprint: str | None,
+) -> ExecutionState:
     state = ExecutionState(
         plan_path=str(plan_path),
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
         action_states={},
+        action_signatures={},
         completed_action_ids=[],
         history=[],
     )
@@ -342,9 +433,69 @@ def _initial_state(plan_path: Path, actions: list[dict[str, Any]]) -> ExecutionS
 def _merge_missing_actions(state: ExecutionState, actions: list[dict[str, Any]]) -> None:
     for action in actions:
         action_id = action.get("id")
-        if not action_id or action_id in state.action_states:
+        if not action_id:
             continue
-        state.action_states[action_id] = _initial_action_state(action)
+        if action_id not in state.action_states:
+            state.action_states[action_id] = _initial_action_state(action)
+        state.action_signatures[action_id] = _action_signature(action)
+
+
+def _reconcile_state_with_plan(
+    state: ExecutionState,
+    *,
+    plan_path: Path,
+    actions: list[dict[str, Any]],
+    plan_schema_version: int | None,
+    plan_fingerprint: str | None,
+) -> ReconciliationResult:
+    previous_plan_path = state.plan_path
+    previous_plan_schema_version = state.plan_schema_version
+    previous_plan_fingerprint = state.plan_fingerprint
+    current_ids = {action.get("id") for action in actions if action.get("id")}
+    current_signatures = {action_id: _action_signature(action) for action in actions if (action_id := action.get("id"))}
+    previous_completed = set(state.completed_action_ids)
+    carried_completed = sorted(action_id for action_id in previous_completed if action_id in current_ids)
+    stale_completed = sorted(action_id for action_id in previous_completed if action_id not in current_ids)
+    new_action_ids = sorted(action_id for action_id in current_ids if action_id not in state.action_states)
+    changed_action_ids: list[str] = []
+
+    for action in actions:
+        action_id = action.get("id")
+        if not action_id:
+            continue
+        previous_signature = state.action_signatures.get(action_id)
+        current_signature = current_signatures[action_id]
+        if previous_signature is not None and previous_signature != current_signature:
+            changed_action_ids.append(action_id)
+            state.action_states[action_id] = _initial_action_state(action)
+            if action_id in previous_completed:
+                previous_completed.remove(action_id)
+        state.action_signatures[action_id] = current_signature
+        state.action_states.setdefault(action_id, _initial_action_state(action))
+
+    state.completed_action_ids = sorted(previous_completed)
+    state.plan_path = str(plan_path)
+    state.plan_schema_version = plan_schema_version
+    state.plan_fingerprint = plan_fingerprint
+
+    plan_changed = (
+        previous_plan_path != str(plan_path)
+        or previous_plan_schema_version != plan_schema_version
+        or previous_plan_fingerprint != plan_fingerprint
+        or bool(changed_action_ids)
+        or bool(new_action_ids)
+        or bool(stale_completed)
+    )
+    return ReconciliationResult(
+        plan_changed=plan_changed,
+        previous_plan_path=previous_plan_path,
+        previous_plan_schema_version=previous_plan_schema_version,
+        previous_plan_fingerprint=previous_plan_fingerprint,
+        carried_completed_action_ids=sorted(previous_completed),
+        stale_completed_action_ids=stale_completed,
+        new_action_ids=new_action_ids,
+        changed_action_ids=sorted(changed_action_ids),
+    )
 
 
 def _initial_action_state(action: dict[str, Any]) -> str:
@@ -521,6 +672,31 @@ def _select_followup_actions(
         ordered = deferred + skipped_tail
 
     return selected
+
+
+def _parse_plan_schema_version(plan: dict[str, Any]) -> int | None:
+    value = plan.get("schema_version")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _action_signature(action: dict[str, Any]) -> str:
+    payload = {
+        "kind": action.get("kind"),
+        "phase": action.get("phase"),
+        "status": action.get("status"),
+        "priority": action.get("priority"),
+        "depends_on": list(action.get("depends_on") or []),
+        "blocked_by": list(action.get("blocked_by") or []),
+        "suggested_cli": list(action.get("suggested_cli") or []),
+        "params": action.get("params") or {},
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 def _phase_rank(phase: str | None) -> int:

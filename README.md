@@ -78,5 +78,5 @@ which actions are `context`, `ready`, or `blocked`, grouped into explicit `triag
 Runnable execution steps are preserved even after a sanitizer signal already exists, so downstream loops can still replay
 verification, enumerate rebuild targets, rebuild sanitized binaries, and rerun rebuild+verify flows.
 A minimal `run-plan` executor can now consume that plan, validate only bounded internal `python3 -m src.main ...` actions,
-filter by phase, honor simple action dependencies, and execute a small number of ready steps sequentially while emitting
-a structured execution summary.
+filter by phase, honor simple action dependencies, reconcile persisted state against regenerated plans, and execute a small
+number of ready steps sequentially while emitting a structured execution summary.

@@ -23,10 +23,18 @@ The executor now produces a richer execution summary and can persist bounded run
 That file stores:
 
 - current per-action states
+- per-action signatures for reconciliation
 - completed action ids
+- the prior plan path/schema/fingerprint
 - append-only transition history
 
 If the file already exists, the executor resumes from it and skips actions already completed in a previous turn.
+When the plan has been regenerated, the executor now reconciles the persisted state against the new plan by:
+
+- carrying forward completed actions whose ids and signatures still match
+- resetting actions whose ids were reused but whose runnable definition changed
+- surfacing newly introduced action ids
+- surfacing stale completed action ids that no longer exist in the plan
 
 ## Why it matters
 

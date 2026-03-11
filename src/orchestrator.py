@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import hashlib
 import json
 from typing import Any
+
+
+PLAN_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -25,6 +29,8 @@ class PlannedAction:
 
 @dataclass
 class OrchestrationPlan:
+    schema_version: int
+    plan_fingerprint: str
     assessment: str
     top_risks: list[str]
     evidence_used: list[str]
@@ -34,6 +40,8 @@ class OrchestrationPlan:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
+            "plan_fingerprint": self.plan_fingerprint,
             "assessment": self.assessment,
             "top_risks": self.top_risks,
             "evidence_used": self.evidence_used,
@@ -165,7 +173,10 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
     stage_guidance = _build_stage_guidance(actions)
 
     assessment = _build_assessment(scan_summary, verified_signal, file_hotspots, function_hotspots)
+    plan_fingerprint = _compute_plan_fingerprint(actions)
     return OrchestrationPlan(
+        schema_version=PLAN_SCHEMA_VERSION,
+        plan_fingerprint=plan_fingerprint,
         assessment=assessment,
         top_risks=top_risks,
         evidence_used=evidence_used,
@@ -190,7 +201,14 @@ def write_plan(path: Path, plan: OrchestrationPlan) -> None:
 
 
 def render_plan_markdown(plan: OrchestrationPlan) -> str:
-    lines = ["# Orchestration Plan", "", f"- Assessment: {plan.assessment}", ""]
+    lines = [
+        "# Orchestration Plan",
+        "",
+        f"- Schema version: {plan.schema_version}",
+        f"- Plan fingerprint: `{plan.plan_fingerprint}`",
+        f"- Assessment: {plan.assessment}",
+        "",
+    ]
     lines.extend(["## Readiness", ""])
     lines.append(f"- Ready actions: {plan.readiness.get('ready_actions', 0)}")
     lines.append(f"- Runnable actions: {plan.readiness.get('runnable_actions', 0)}")
@@ -533,6 +551,25 @@ def _build_execution_actions(summary: dict[str, Any], readiness: dict[str, Any],
             )
 
     return actions
+
+
+def _compute_plan_fingerprint(actions: list[PlannedAction]) -> str:
+    payload = [
+        {
+            "id": action.id,
+            "kind": action.kind,
+            "phase": action.phase,
+            "status": action.status,
+            "priority": action.priority,
+            "depends_on": action.depends_on,
+            "blocked_by": action.blocked_by,
+            "suggested_cli": action.suggested_cli,
+            "params": action.params,
+        }
+        for action in actions
+    ]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 def _count_by_phase(actions: list[PlannedAction]) -> dict[str, int]:

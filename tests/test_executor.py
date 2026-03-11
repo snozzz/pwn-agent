@@ -359,7 +359,123 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(resumed.action_states["verify-existing-binary"], "dry-run")
             state_payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state_payload["completed_action_ids"], ["rebuild-target-1", "verify-existing-binary"])
+            self.assertIn("action_signatures", state_payload)
             self.assertGreaterEqual(len(state_payload["history"]), 4)
+
+    def test_execute_plan_reconciles_regenerated_plan_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state.json"
+            plan_path = root / "plan.json"
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "plan_fingerprint": "plan-v1",
+                        "next_actions": [
+                            {
+                                "id": "rebuild-target-1",
+                                "kind": "rebuild_target",
+                                "phase": "execution",
+                                "title": "Rebuild target",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                            {
+                                "id": "verify-existing-binary",
+                                "kind": "verify_binary",
+                                "phase": "execution",
+                                "title": "Verify current binary",
+                                "status": "ready",
+                                "priority": 90,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = execute_plan(plan_path, max_actions=1, dry_run=True, state_path=state_path)
+            self.assertEqual(first.completed_action_ids, ["rebuild-target-1"])
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "plan_fingerprint": "plan-v2",
+                        "next_actions": [
+                            {
+                                "id": "rebuild-target-1",
+                                "kind": "rebuild_target",
+                                "phase": "execution",
+                                "title": "Rebuild target",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-target",
+                                    "--root",
+                                    str(root),
+                                    "--index",
+                                    "1",
+                                    "--output-name",
+                                    "planned-sanitized-target",
+                                ],
+                            },
+                            {
+                                "id": "trace-hotspot-1",
+                                "kind": "trace_input_surface",
+                                "phase": "triage",
+                                "title": "Trace hotspot",
+                                "status": "ready",
+                                "priority": 95,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            resumed = execute_plan(plan_path, max_actions=1, dry_run=True, state_path=state_path)
+
+            self.assertTrue(resumed.resumed_from_state)
+            self.assertTrue(resumed.plan_changed)
+            self.assertEqual(resumed.previous_plan_fingerprint, "plan-v1")
+            self.assertEqual(resumed.plan_fingerprint, "plan-v2")
+            self.assertEqual(resumed.changed_action_ids, ["rebuild-target-1"])
+            self.assertEqual(resumed.new_action_ids, ["trace-hotspot-1"])
+            self.assertEqual(resumed.stale_completed_action_ids, [])
+            self.assertEqual(resumed.resumed_completed_action_ids, [])
+            self.assertEqual(resumed.selected_action_ids, ["rebuild-target-1"])
+            self.assertEqual(resumed.action_states["rebuild-target-1"], "dry-run")
+            self.assertEqual(resumed.action_states["trace-hotspot-1"], "deferred")
 
     def test_execute_plan_raises_for_missing_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

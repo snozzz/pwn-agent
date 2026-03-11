@@ -43,7 +43,11 @@ Each planned action now carries:
 - optional `suggested_cli` for directly runnable steps
 - `expected_outcome` and structured `params`
 
-The top-level plan also includes a `readiness` block with:
+The top-level plan also includes:
+
+- `schema_version` so a controller can detect plan-shape upgrades
+- `plan_fingerprint` so regenerated plans can be compared cheaply
+- a `readiness` block with:
 
 - counts for ready, runnable, blocked, and context actions
 - phase counts
@@ -80,7 +84,7 @@ Current behavior is intentionally narrow:
 - `depends_on` is respected during selection, so rebuild+verify can stay gated behind target enumeration/rebuild steps
 - `--dry-run` validates and reports what would execute without actually running it
 - each run emits a structured execution summary for downstream tooling
-- execution summaries now include runnable/deferred action inventory, explicit state transitions, and resume metadata
+- execution summaries now include runnable/deferred action inventory, explicit state transitions, resume metadata, and reconciliation visibility for changed/new/stale actions
 
 ## Why this matters
 

@@ -76,6 +76,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("list-rebuild-targets", ids)
         self.assertIn("rebuild-target-1", ids)
         self.assertIn("run-rebuild-verify", ids)
+        self.assertEqual(plan.schema_version, 2)
+        self.assertTrue(plan.plan_fingerprint)
         self.assertEqual(plan.readiness["runnable_actions"], 4)
         self.assertEqual(plan.readiness["phase_counts"]["execution"], 4)
         self.assertEqual(
@@ -107,6 +109,8 @@ class OrchestratorTests(unittest.TestCase):
         plan = build_plan(summary)
         rendered = render_plan_markdown(plan)
 
+        self.assertIn("Schema version: 2", rendered)
+        self.assertIn("Plan fingerprint:", rendered)
         self.assertIn("Runnable actions: 0", rendered)
         self.assertIn("Phase counts:", rendered)
         self.assertIn("Recommended next actions:", rendered)
