@@ -6,6 +6,7 @@ from pathlib import Path
 from .audit_export import write_audit_summary
 from .config import AgentConfig
 from .compdb import CompileDatabase
+from .executor import execute_plan, render_execution_markdown, write_execution_summary
 from .orchestrator import build_plan, load_audit_summary, render_plan_markdown, write_plan
 from .pipeline import rebuild_and_verify
 from .reporting import render_markdown, write_report
@@ -40,6 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
     plan_audit.add_argument("--audit-json", type=Path, required=True, help="input audit summary json")
     plan_audit.add_argument("--output", type=Path, required=True, help="output orchestration plan json")
     plan_audit.add_argument("--report", type=Path, help="optional markdown plan report")
+
+    run_plan = subparsers.add_parser("run-plan", help="execute bounded ready actions from a generated plan")
+    run_plan.add_argument("--plan", type=Path, required=True, help="input orchestration plan json")
+    run_plan.add_argument("--output", type=Path, required=True, help="output execution summary json")
+    run_plan.add_argument("--report", type=Path, help="optional markdown execution report")
+    run_plan.add_argument("--action-id", help="optional specific ready action id to execute")
+    run_plan.add_argument("--max-actions", type=int, default=1, help="maximum number of ready actions to execute")
+    run_plan.add_argument("--dry-run", action="store_true", help="validate and render runnable actions without executing them")
+    run_plan.add_argument("--timeout", type=int, default=30, help="per-action timeout in seconds")
 
     sanitize = subparsers.add_parser("sanitize-build", help="build a single C file with sanitizers")
     sanitize.add_argument("--root", type=Path, required=True, help="workspace root")
@@ -114,6 +124,20 @@ def main() -> int:
         if args.report:
             write_report(args.report, render_plan_markdown(plan))
         print(f"planned {len(plan.next_actions)} actions; wrote {args.output}")
+        return 0
+
+    if args.command == "run-plan":
+        summary = execute_plan(
+            args.plan,
+            action_id=args.action_id,
+            max_actions=args.max_actions,
+            dry_run=args.dry_run,
+            timeout_seconds=args.timeout,
+        )
+        write_execution_summary(args.output, summary)
+        if args.report:
+            write_report(args.report, render_execution_markdown(summary))
+        print(f"executed {summary.executed} action(s); wrote {args.output}")
         return 0
 
     if args.command == "sanitize-build":
