@@ -391,6 +391,20 @@ def _build_execution_readiness(
     if has_compile_database and rebuild_targets > 0:
         ready_actions.append(
             {
+                "kind": "rebuild-plan",
+                "cli": [
+                    "python3",
+                    "-m",
+                    "src.main",
+                    "rebuild-plan",
+                    "--root",
+                    str(root),
+                ],
+                "detail": f"compile database ready with {rebuild_targets} target(s)",
+            }
+        )
+        ready_actions.append(
+            {
                 "kind": "rebuild-target",
                 "cli": [
                     "python3",

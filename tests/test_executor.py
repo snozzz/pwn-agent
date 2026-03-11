@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.executor import execute_plan
+from src.executor import ExecutorError, execute_plan
 
 
 class ExecutorTests(unittest.TestCase):
@@ -20,6 +20,7 @@ class ExecutorTests(unittest.TestCase):
                             {
                                 "id": "verify-existing-binary",
                                 "kind": "verify_binary",
+                                "phase": "execution",
                                 "title": "Run verification",
                                 "status": "ready",
                                 "priority": 75,
@@ -44,6 +45,7 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.stopped_reason, "dry-run")
             self.assertEqual(summary.selected_action_ids, ["verify-existing-binary"])
             self.assertEqual(summary.records[0].status, "dry-run")
+            self.assertEqual(summary.records[0].phase, "execution")
 
     def test_execute_plan_runs_allowlisted_internal_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,7 +70,8 @@ class ExecutorTests(unittest.TestCase):
                         "next_actions": [
                             {
                                 "id": "run-rebuild-plan",
-                                "kind": "inspect_rebuild_failure",
+                                "kind": "list_rebuild_targets",
+                                "phase": "execution",
                                 "title": "Inspect rebuild options",
                                 "status": "ready",
                                 "priority": 65,
@@ -94,6 +97,119 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.records[0].status, "ok")
             self.assertEqual(summary.records[0].returncode, 0)
             self.assertIn("targets=1", summary.records[0].stdout)
+
+    def test_execute_plan_respects_phase_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "next_actions": [
+                            {
+                                "id": "triage-only",
+                                "kind": "inspect_file",
+                                "phase": "triage",
+                                "title": "Inspect a file",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                            {
+                                "id": "exec-only",
+                                "kind": "list_rebuild_targets",
+                                "phase": "execution",
+                                "title": "List targets",
+                                "status": "ready",
+                                "priority": 50,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = execute_plan(plan_path, phase="execution", dry_run=True)
+
+            self.assertEqual(summary.selected_action_ids, ["exec-only"])
+
+    def test_execute_plan_skips_dependency_until_prerequisite_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "next_actions": [
+                            {
+                                "id": "run-rebuild-verify",
+                                "kind": "run_rebuild_verify",
+                                "phase": "execution",
+                                "title": "Run rebuild+verify",
+                                "status": "ready",
+                                "priority": 100,
+                                "depends_on": ["rebuild-target-1"],
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                            {
+                                "id": "rebuild-target-1",
+                                "kind": "rebuild_target",
+                                "phase": "execution",
+                                "title": "Rebuild target",
+                                "status": "ready",
+                                "priority": 90,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = execute_plan(plan_path, max_actions=2, dry_run=True)
+
+            self.assertEqual(summary.selected_action_ids, ["rebuild-target-1", "run-rebuild-verify"])
+
+    def test_execute_plan_raises_for_missing_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps({"next_actions": []}), encoding="utf-8")
+
+            with self.assertRaises(ExecutorError):
+                execute_plan(plan_path, phase="execution", dry_run=True)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ ALLOWED_MAIN_SUBCOMMANDS = {
 class ExecutionRecord:
     action_id: str
     kind: str
+    phase: str
     title: str
     command: list[str]
     returncode: int | None
@@ -55,6 +56,7 @@ def execute_plan(
     plan_path: Path,
     *,
     action_id: str | None = None,
+    phase: str | None = None,
     max_actions: int = 1,
     dry_run: bool = False,
     timeout_seconds: int = 30,
@@ -65,9 +67,10 @@ def execute_plan(
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     actions = list(plan.get("next_actions", []))
 
-    selected = _select_actions(actions, action_id=action_id, max_actions=max_actions)
+    selected = _select_actions(actions, action_id=action_id, phase=phase, max_actions=max_actions)
     records: list[ExecutionRecord] = []
     stopped_reason = "no-executable-actions"
+    completed_ids: set[str] = set()
 
     for action in selected:
         argv = _validate_suggested_cli(action)
@@ -76,6 +79,7 @@ def execute_plan(
                 ExecutionRecord(
                     action_id=action["id"],
                     kind=action.get("kind", "unknown"),
+                    phase=action.get("phase", "execution"),
                     title=action.get("title", action["id"]),
                     command=argv,
                     returncode=None,
@@ -85,6 +89,7 @@ def execute_plan(
                 )
             )
             stopped_reason = "dry-run"
+            completed_ids.add(action["id"])
             continue
 
         proc = subprocess.run(
@@ -100,6 +105,7 @@ def execute_plan(
             ExecutionRecord(
                 action_id=action["id"],
                 kind=action.get("kind", "unknown"),
+                phase=action.get("phase", "execution"),
                 title=action.get("title", action["id"]),
                 command=argv,
                 returncode=proc.returncode,
@@ -111,6 +117,7 @@ def execute_plan(
         if proc.returncode != 0:
             stopped_reason = "command-failed"
             break
+        completed_ids.add(action["id"])
     else:
         if records and stopped_reason == "no-executable-actions":
             stopped_reason = "completed"
@@ -142,7 +149,7 @@ def render_execution_markdown(summary: ExecutionSummary) -> str:
         return "\n".join(lines) + "\n"
 
     for record in summary.records:
-        lines.append(f"- [{record.status}] {record.title}")
+        lines.append(f"- [{record.phase}] [{record.status}] {record.title}")
         lines.append(f"  action-id: `{record.action_id}`")
         lines.append(f"  kind: `{record.kind}`")
         lines.append(f"  command: `{_shell_join(record.command)}`")
@@ -159,19 +166,64 @@ def render_execution_markdown(summary: ExecutionSummary) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _select_actions(actions: list[dict[str, Any]], *, action_id: str | None, max_actions: int) -> list[dict[str, Any]]:
+def _select_actions(
+    actions: list[dict[str, Any]],
+    *,
+    action_id: str | None,
+    phase: str | None,
+    max_actions: int,
+) -> list[dict[str, Any]]:
     runnable = [
         action
         for action in actions
         if action.get("status") == "ready" and action.get("suggested_cli")
     ]
+    if phase is not None:
+        runnable = [action for action in runnable if action.get("phase") == phase]
+        if not runnable:
+            raise ExecutorError(f"ready phase not found: {phase}")
     if action_id is not None:
         runnable = [action for action in runnable if action.get("id") == action_id]
         if not runnable:
             raise ExecutorError(f"ready action not found: {action_id}")
 
-    runnable.sort(key=lambda action: int(action.get("priority", 0)), reverse=True)
-    return runnable[:max_actions]
+    indexed = {action.get("id"): action for action in runnable if action.get("id")}
+    ordered = sorted(
+        runnable,
+        key=lambda item: (_phase_rank(item.get("phase")), int(item.get("priority", 0)), item.get("id", "")),
+        reverse=True,
+    )
+    selected: list[dict[str, Any]] = []
+    completed: set[str] = set()
+    remaining = list(ordered)
+
+    while remaining and len(selected) < max_actions:
+        progressed = False
+        deferred: list[dict[str, Any]] = []
+        for action in remaining:
+            depends_on = list(action.get("depends_on") or [])
+            if any(dependency in indexed and dependency not in completed for dependency in depends_on):
+                deferred.append(action)
+                continue
+            selected.append(action)
+            completed.add(action["id"])
+            progressed = True
+            if len(selected) >= max_actions:
+                break
+        if not progressed:
+            break
+        remaining = deferred
+
+    return selected
+
+
+def _phase_rank(phase: str | None) -> int:
+    order = {
+        "triage": 1,
+        "execution": 2,
+        "synthesis": 3,
+    }
+    return order.get(phase or "execution", 0)
 
 
 def _validate_suggested_cli(action: dict[str, Any]) -> list[str]:

@@ -39,6 +39,7 @@ python3 -m src.main audit --root /path/to/project --report out/audit.md --trace-
 python3 -m src.main audit --root /path/to/project --report out/audit.md --audit-json out/audit.json
 python3 -m src.main plan-audit --audit-json out/audit.json --output out/plan.json --report out/plan.md
 python3 -m src.main run-plan --plan out/plan.json --output out/exec.json --report out/exec.md --dry-run
+python3 -m src.main run-plan --plan out/plan.json --output out/exec.json --report out/exec.md --phase execution --max-actions 3 --dry-run
 python3 -m src.main audit --root /path/to/project --report out/audit.md --config pwn-agent.json
 python3 -m src.main sanitize-build --root examples --source examples/vuln_demo.c --output examples/vuln_demo_asan --config pwn-agent.json
 python3 -m src.main verify-run --root examples --binary examples/vuln_demo_asan $(python3 - <<'PY'
@@ -73,6 +74,9 @@ best-effort function-level focus so findings and input surfaces can be tied back
 and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
 A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop.
 The audit export now includes concise file/function rollups plus execution-readiness data, and the plan output now marks
-which actions are `context`, `ready`, or `blocked`, along with prerequisites and suggested CLI when a step is executable.
+which actions are `context`, `ready`, or `blocked`, grouped into explicit `triage`, `execution`, and `synthesis` phases.
+Runnable execution steps are preserved even after a sanitizer signal already exists, so downstream loops can still replay
+verification, enumerate rebuild targets, rebuild sanitized binaries, and rerun rebuild+verify flows.
 A minimal `run-plan` executor can now consume that plan, validate only bounded internal `python3 -m src.main ...` actions,
-and execute a small number of ready steps sequentially while emitting a structured execution summary.
+filter by phase, honor simple action dependencies, and execute a small number of ready steps sequentially while emitting
+a structured execution summary.

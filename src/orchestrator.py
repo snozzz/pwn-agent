@@ -10,6 +10,7 @@ from typing import Any
 class PlannedAction:
     id: str
     kind: str
+    phase: str
     title: str
     status: str
     priority: int
@@ -81,181 +82,15 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
     if readiness.get("missing_prerequisites"):
         evidence_used.append("missing prerequisites tracked for execution paths")
 
-    if function_hotspots:
-        top_function = function_hotspots[0]
-        actions.append(
-            PlannedAction(
-                id="focus-function-1",
-                kind="focus_functions",
-                title=f"Inspect highest-ranked function hotspot: {top_function['function_name']}",
-                status="context",
-                priority=100,
-                rationale="highest-ranked function hotspot should be inspected first",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=[],
-                suggested_cli=None,
-                expected_outcome="identify the local code path most likely to explain current findings",
-                params={
-                    "file_path": top_function["file_path"],
-                    "function_name": top_function["function_name"],
-                    "score": top_function["score"],
-                },
-            )
-        )
-    elif function_rollups:
-        top_function = function_rollups[0]
-        actions.append(
-            PlannedAction(
-                id="focus-function-rollup-1",
-                kind="focus_functions",
-                title=f"Inspect top function rollup: {top_function['function_name']}",
-                status="context",
-                priority=95,
-                rationale="function-level aggregation exists even when hotspot ranking is sparse",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=[],
-                suggested_cli=None,
-                expected_outcome="map clustered findings and surfaces to one function scope",
-                params=top_function,
-            )
-        )
-
-    if file_hotspots:
-        top_file = file_hotspots[0]
-        actions.append(
-            PlannedAction(
-                id="inspect-file-1",
-                kind="inspect_file",
-                title=f"Inspect highest-ranked file hotspot: {top_file['file_path']}",
-                status="context",
-                priority=90,
-                rationale="top file hotspot concentrates current findings and surfaces",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=[],
-                suggested_cli=None,
-                expected_outcome="confirm whether the file contains the shortest path to a fix or proof",
-                params={"file_path": top_file["file_path"]},
-            )
-        )
-    elif file_rollups:
-        top_file = file_rollups[0]
-        actions.append(
-            PlannedAction(
-                id="inspect-file-rollup-1",
-                kind="inspect_file",
-                title=f"Inspect top file rollup: {top_file['file_path']}",
-                status="context",
-                priority=85,
-                rationale="file-level aggregation captures combined finding and surface density",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=[],
-                suggested_cli=None,
-                expected_outcome="confirm the file-level concentration of suspicious behavior",
-                params=top_file,
-            )
-        )
-
-    if input_surfaces:
-        surface = input_surfaces[0]
-        actions.append(
-            PlannedAction(
-                id="trace-input-1",
-                kind="trace_input_surface",
-                title=f"Trace top input surface from {surface['file_path']}:{surface['line_number']}",
-                status="context",
-                priority=80,
-                rationale="input entrypoints are the best place to start dataflow review",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=[],
-                suggested_cli=None,
-                expected_outcome="connect attacker-controlled input to the finding cluster",
-                params={
-                    "file_path": surface["file_path"],
-                    "line_number": surface["line_number"],
-                    "category": surface["category"],
-                    "function_name": surface.get("function_name"),
-                },
-            )
-        )
-
-    if readiness.get("verification_state") == "ready":
-        actions.append(
-            PlannedAction(
-                id="verify-existing-binary",
-                kind="verify_binary",
-                title="Run the configured verification binary",
-                status="ready",
-                priority=75,
-                rationale="verification inputs are already configured and the binary is present",
-                depends_on=[],
-                blocked_by=[],
-                prerequisites=_prerequisites(
-                    ("verification-plan.json", readiness.get("has_verification_plan", False), "argv is available"),
-                    (
-                        readiness.get("verification_binary") or "verification binary",
-                        readiness.get("verification_binary_present", False),
-                        "binary exists in the workspace",
-                    ),
-                ),
-                suggested_cli=[
-                    "python3",
-                    "-m",
-                    "src.main",
-                    "verify-run",
-                    "--root",
-                    str(root),
-                    "--binary",
-                    str(Path(root) / str(readiness.get("verification_binary"))),
-                ],
-                expected_outcome="capture runtime evidence before rebuilding anything",
-                params={"binary": readiness.get("verification_binary")},
-            )
-        )
-
-    if summary.get("compile_database") and not rebuild_verify:
-        actions.append(
-            PlannedAction(
-                id="run-rebuild-verify",
-                kind="run_rebuild_verify",
-                title="Rebuild target 1 with sanitizers and execute the verification plan",
-                status="ready" if readiness.get("has_verification_plan") else "blocked",
-                priority=70,
-                rationale="compile database exists but rebuild verification evidence is missing",
-                depends_on=[],
-                blocked_by=[] if readiness.get("has_verification_plan") else ["verification-plan.json missing"],
-                prerequisites=_prerequisites(
-                    ("compile_commands.json", readiness.get("has_compile_database", False), "rebuild target metadata available"),
-                    ("verification-plan.json", readiness.get("has_verification_plan", False), "verification args available"),
-                ),
-                suggested_cli=[
-                    "python3",
-                    "-m",
-                    "src.main",
-                    "rebuild-verify",
-                    "--root",
-                    str(root),
-                    "--index",
-                    "1",
-                    "--output-name",
-                    "planned-sanitized-target",
-                ]
-                if readiness.get("has_compile_database")
-                else None,
-                expected_outcome="produce a sanitized binary and runtime signal if the bug is reproducible",
-                params={"target_index": 1, "output_name": "planned-sanitized-target"},
-            )
-        )
+    actions.extend(_build_context_actions(function_hotspots, function_rollups, file_hotspots, file_rollups, input_surfaces))
+    actions.extend(_build_execution_actions(summary, readiness, root=root))
 
     if rebuild_verify and rebuild_verify.get("rebuild", {}).get("returncode") not in (None, 0):
         actions.append(
             PlannedAction(
                 id="inspect-rebuild-failure",
                 kind="inspect_rebuild_failure",
+                phase="execution",
                 title="Inspect the sanitizer rebuild failure before retrying verification",
                 status="ready",
                 priority=65,
@@ -281,6 +116,7 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
             PlannedAction(
                 id="explain-root-cause",
                 kind="explain_root_cause",
+                phase="synthesis",
                 title="Summarize the likely root cause from verified evidence",
                 status="ready",
                 priority=60,
@@ -301,6 +137,7 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
             PlannedAction(
                 id=f"blocked-{blocked.get('kind', 'action')}-{index}",
                 kind=blocked.get("kind", "blocked_action"),
+                phase="execution",
                 title=f"Blocked: {blocked.get('kind', 'action')}",
                 status="blocked",
                 priority=40 - index,
@@ -317,15 +154,24 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
             )
         )
 
+    actions.sort(key=lambda action: (int(action.priority), action.id), reverse=True)
+    phase_counts = _count_by_phase(actions)
+    ready_actions = sum(1 for action in actions if action.status == "ready")
+    runnable_actions = sum(1 for action in actions if action.status == "ready" and action.suggested_cli)
+    blocked_actions = sum(1 for action in actions if action.status == "blocked")
+    context_actions = sum(1 for action in actions if action.status == "context")
+
     assessment = _build_assessment(scan_summary, verified_signal, file_hotspots, function_hotspots)
     return OrchestrationPlan(
         assessment=assessment,
         top_risks=top_risks,
         evidence_used=evidence_used,
         readiness={
-            "ready_actions": sum(1 for action in actions if action.status == "ready"),
-            "blocked_actions": sum(1 for action in actions if action.status == "blocked"),
-            "context_actions": sum(1 for action in actions if action.status == "context"),
+            "ready_actions": ready_actions,
+            "runnable_actions": runnable_actions,
+            "blocked_actions": blocked_actions,
+            "context_actions": context_actions,
+            "phase_counts": phase_counts,
             "missing_prerequisites": readiness.get("missing_prerequisites", []),
             "verification_state": readiness.get("verification_state"),
             "rebuild_state": readiness.get("rebuild_state"),
@@ -343,8 +189,17 @@ def render_plan_markdown(plan: OrchestrationPlan) -> str:
     lines = ["# Orchestration Plan", "", f"- Assessment: {plan.assessment}", ""]
     lines.extend(["## Readiness", ""])
     lines.append(f"- Ready actions: {plan.readiness.get('ready_actions', 0)}")
+    lines.append(f"- Runnable actions: {plan.readiness.get('runnable_actions', 0)}")
     lines.append(f"- Blocked actions: {plan.readiness.get('blocked_actions', 0)}")
     lines.append(f"- Context actions: {plan.readiness.get('context_actions', 0)}")
+    phase_counts = plan.readiness.get("phase_counts", {})
+    if phase_counts:
+        lines.append(
+            "- Phase counts: "
+            + ", ".join(f"{phase}={count}" for phase, count in sorted(phase_counts.items()))
+        )
+    else:
+        lines.append("- Phase counts: none")
     if plan.readiness.get("verification_state"):
         lines.append(f"- Verification state: {plan.readiness['verification_state']}")
     if plan.readiness.get("rebuild_state"):
@@ -367,9 +222,11 @@ def render_plan_markdown(plan: OrchestrationPlan) -> str:
     lines.extend(["", "## Next Actions", ""])
     if plan.next_actions:
         for action in plan.next_actions:
-            lines.append(f"- [{action.priority}] [{action.status}] {action.title}")
+            lines.append(f"- [{action.priority}] [{action.phase}] [{action.status}] {action.title}")
             lines.append(f"  kind: `{action.kind}`")
             lines.append(f"  rationale: {action.rationale}")
+            if action.depends_on:
+                lines.append(f"  depends-on: {', '.join(action.depends_on)}")
             if action.blocked_by:
                 lines.append(f"  blocked-by: {', '.join(action.blocked_by)}")
             if action.prerequisites:
@@ -384,6 +241,282 @@ def render_plan_markdown(plan: OrchestrationPlan) -> str:
     else:
         lines.append("- none")
     return "\n".join(lines) + "\n"
+
+
+def _build_context_actions(
+    function_hotspots: list[dict[str, Any]],
+    function_rollups: list[dict[str, Any]],
+    file_hotspots: list[dict[str, Any]],
+    file_rollups: list[dict[str, Any]],
+    input_surfaces: list[dict[str, Any]],
+) -> list[PlannedAction]:
+    actions: list[PlannedAction] = []
+
+    if function_hotspots:
+        top_function = function_hotspots[0]
+        actions.append(
+            PlannedAction(
+                id="focus-function-1",
+                kind="focus_functions",
+                phase="triage",
+                title=f"Inspect highest-ranked function hotspot: {top_function['function_name']}",
+                status="context",
+                priority=100,
+                rationale="highest-ranked function hotspot should be inspected first",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="identify the local code path most likely to explain current findings",
+                params={
+                    "file_path": top_function["file_path"],
+                    "function_name": top_function["function_name"],
+                    "score": top_function["score"],
+                },
+            )
+        )
+    elif function_rollups:
+        top_function = function_rollups[0]
+        actions.append(
+            PlannedAction(
+                id="focus-function-rollup-1",
+                kind="focus_functions",
+                phase="triage",
+                title=f"Inspect top function rollup: {top_function['function_name']}",
+                status="context",
+                priority=95,
+                rationale="function-level aggregation exists even when hotspot ranking is sparse",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="map clustered findings and surfaces to one function scope",
+                params=top_function,
+            )
+        )
+
+    if file_hotspots:
+        top_file = file_hotspots[0]
+        actions.append(
+            PlannedAction(
+                id="inspect-file-1",
+                kind="inspect_file",
+                phase="triage",
+                title=f"Inspect highest-ranked file hotspot: {top_file['file_path']}",
+                status="context",
+                priority=90,
+                rationale="top file hotspot concentrates current findings and surfaces",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="confirm whether the file contains the shortest path to a fix or proof",
+                params={"file_path": top_file["file_path"]},
+            )
+        )
+    elif file_rollups:
+        top_file = file_rollups[0]
+        actions.append(
+            PlannedAction(
+                id="inspect-file-rollup-1",
+                kind="inspect_file",
+                phase="triage",
+                title=f"Inspect top file rollup: {top_file['file_path']}",
+                status="context",
+                priority=85,
+                rationale="file-level aggregation captures combined finding and surface density",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="confirm the file-level concentration of suspicious behavior",
+                params=top_file,
+            )
+        )
+
+    if input_surfaces:
+        surface = input_surfaces[0]
+        actions.append(
+            PlannedAction(
+                id="trace-input-1",
+                kind="trace_input_surface",
+                phase="triage",
+                title=f"Trace top input surface from {surface['file_path']}:{surface['line_number']}",
+                status="context",
+                priority=80,
+                rationale="input entrypoints are the best place to start dataflow review",
+                depends_on=[],
+                blocked_by=[],
+                prerequisites=[],
+                suggested_cli=None,
+                expected_outcome="connect attacker-controlled input to the finding cluster",
+                params={
+                    "file_path": surface["file_path"],
+                    "line_number": surface["line_number"],
+                    "category": surface["category"],
+                    "function_name": surface.get("function_name"),
+                },
+            )
+        )
+
+    return actions
+
+
+def _build_execution_actions(summary: dict[str, Any], readiness: dict[str, Any], *, root: str) -> list[PlannedAction]:
+    actions: list[PlannedAction] = []
+    verification_state = readiness.get("verification_state")
+    rebuild_state = readiness.get("rebuild_state")
+
+    for action in readiness.get("ready_actions", []):
+        kind = action.get("kind", "ready-action")
+        suggested_cli = list(action.get("cli") or []) or None
+        detail = action.get("detail")
+
+        if kind == "verify-run":
+            title = "Run the configured verification binary"
+            rationale = "verification inputs are configured and can be executed immediately"
+            expected_outcome = "capture runtime evidence before changing the build"
+            priority = 75
+            if verification_state in {"signal-detected", "completed-no-signal"}:
+                title = "Re-run the configured verification binary"
+                rationale = "verification can still be replayed to confirm reproducibility or compare later edits"
+                expected_outcome = "refresh the runtime signal using the current binary and inputs"
+                priority = 58
+            actions.append(
+                PlannedAction(
+                    id="verify-existing-binary",
+                    kind="verify_binary",
+                    phase="execution",
+                    title=title,
+                    status="ready",
+                    priority=priority,
+                    rationale=rationale,
+                    depends_on=[],
+                    blocked_by=[],
+                    prerequisites=_prerequisites(
+                        ("verification-plan.json", readiness.get("has_verification_plan", False), "argv is available"),
+                        (
+                            readiness.get("verification_binary") or "verification binary",
+                            readiness.get("verification_binary_present", False),
+                            "binary exists in the workspace",
+                        ),
+                    ),
+                    suggested_cli=suggested_cli,
+                    expected_outcome=expected_outcome,
+                    params={
+                        "binary": readiness.get("verification_binary"),
+                        "detail": detail,
+                    },
+                )
+            )
+        elif kind == "rebuild-plan":
+            actions.append(
+                PlannedAction(
+                    id="list-rebuild-targets",
+                    kind="list_rebuild_targets",
+                    phase="execution",
+                    title="Enumerate sanitizer rebuild targets from compile_commands.json",
+                    status="ready",
+                    priority=72,
+                    rationale="compile database metadata is available and should stay visible to the planner",
+                    depends_on=[],
+                    blocked_by=[],
+                    prerequisites=_prerequisites(
+                        ("compile_commands.json", readiness.get("has_compile_database", False), "rebuild target metadata available"),
+                    ),
+                    suggested_cli=suggested_cli,
+                    expected_outcome="show which compile database targets can be rebuilt under sanitizers",
+                    params={"detail": detail},
+                )
+            )
+        elif kind == "rebuild-target":
+            depends_on = ["list-rebuild-targets"] if readiness.get("has_compile_database") else []
+            priority = 68
+            title = "Rebuild target 1 with sanitizer flags"
+            rationale = "the compile database is present, so a bounded sanitizer rebuild is available"
+            expected_outcome = "produce a sanitized binary for follow-up execution"
+            if rebuild_state in {"signal-detected", "completed-no-signal", "rebuilt-no-verification-plan"}:
+                title = "Rebuild target 1 again with sanitizer flags"
+                rationale = "rebuilding remains useful after audit iterations or source edits"
+                priority = 54
+                expected_outcome = "refresh the sanitized binary used for downstream validation"
+            actions.append(
+                PlannedAction(
+                    id="rebuild-target-1",
+                    kind="rebuild_target",
+                    phase="execution",
+                    title=title,
+                    status="ready",
+                    priority=priority,
+                    rationale=rationale,
+                    depends_on=depends_on,
+                    blocked_by=[],
+                    prerequisites=_prerequisites(
+                        ("compile_commands.json", readiness.get("has_compile_database", False), "rebuild target metadata available"),
+                    ),
+                    suggested_cli=suggested_cli,
+                    expected_outcome=expected_outcome,
+                    params={"target_index": 1, "detail": detail},
+                )
+            )
+        elif kind == "rebuild-verify":
+            depends_on = ["rebuild-target-1"] if readiness.get("has_compile_database") else []
+            priority = 70
+            title = "Rebuild target 1 with sanitizers and execute the verification plan"
+            rationale = "compile database and verification inputs are both present"
+            expected_outcome = "produce a sanitized binary and runtime signal if the bug is reproducible"
+            if rebuild_state in {"signal-detected", "completed-no-signal"}:
+                title = "Re-run rebuild plus verification for target 1"
+                rationale = "the rebuild+verify flow remains a useful replayable proof step"
+                priority = 56
+                expected_outcome = "refresh the sanitized execution evidence after later changes"
+            actions.append(
+                PlannedAction(
+                    id="run-rebuild-verify",
+                    kind="run_rebuild_verify",
+                    phase="execution",
+                    title=title,
+                    status="ready",
+                    priority=priority,
+                    rationale=rationale,
+                    depends_on=depends_on,
+                    blocked_by=[],
+                    prerequisites=_prerequisites(
+                        ("compile_commands.json", readiness.get("has_compile_database", False), "rebuild target metadata available"),
+                        ("verification-plan.json", readiness.get("has_verification_plan", False), "verification args available"),
+                    ),
+                    suggested_cli=suggested_cli,
+                    expected_outcome=expected_outcome,
+                    params={"target_index": 1, "output_name": "planned-sanitized-target", "detail": detail},
+                )
+            )
+        else:
+            actions.append(
+                PlannedAction(
+                    id=f"ready-{kind}",
+                    kind=kind,
+                    phase="execution",
+                    title=detail or f"Run {kind}",
+                    status="ready",
+                    priority=50,
+                    rationale="execution readiness surfaced a directly runnable internal action",
+                    depends_on=[],
+                    blocked_by=[],
+                    prerequisites=[],
+                    suggested_cli=suggested_cli,
+                    expected_outcome="advance the audit through a bounded internal command",
+                    params={"detail": detail},
+                )
+            )
+
+    return actions
+
+
+def _count_by_phase(actions: list[PlannedAction]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in actions:
+        counts[action.phase] = counts.get(action.phase, 0) + 1
+    return counts
 
 
 def _build_assessment(
