@@ -37,6 +37,7 @@ python3 -m src.main scan --root /path/to/project --report out/report.md
 python3 -m src.main scan-sarif --root /path/to/project --output out/report.sarif
 python3 -m src.main audit --root /path/to/project --report out/audit.md --trace-json out/trace.json
 python3 -m src.main audit --root /path/to/project --report out/audit.md --audit-json out/audit.json
+python3 -m src.main plan-audit --audit-json out/audit.json --output out/plan.json --report out/plan.md
 python3 -m src.main audit --root /path/to/project --report out/audit.md --config pwn-agent.json
 python3 -m src.main sanitize-build --root examples --source examples/vuln_demo.c --output examples/vuln_demo_asan --config pwn-agent.json
 python3 -m src.main verify-run --root examples --binary examples/vuln_demo_asan $(python3 - <<'PY'
@@ -69,3 +70,4 @@ This MVP is intended for defensive security review on local codebases with const
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
 and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
+A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop.

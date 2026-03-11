@@ -6,6 +6,7 @@ from pathlib import Path
 from .audit_export import write_audit_summary
 from .config import AgentConfig
 from .compdb import CompileDatabase
+from .orchestrator import build_plan, load_audit_summary, render_plan_markdown, write_plan
 from .pipeline import rebuild_and_verify
 from .reporting import render_markdown, write_report
 from .rebuild import default_compdb_path, extract_targets, rebuild_target, rewrite_for_sanitizers
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--trace-json", type=Path, help="optional trace json output path")
     audit.add_argument("--audit-json", type=Path, help="optional structured audit summary output path")
     audit.add_argument("--config", type=Path, help="optional JSON config path")
+
+    plan_audit = subparsers.add_parser("plan-audit", help="build an orchestration plan from audit json")
+    plan_audit.add_argument("--audit-json", type=Path, required=True, help="input audit summary json")
+    plan_audit.add_argument("--output", type=Path, required=True, help="output orchestration plan json")
+    plan_audit.add_argument("--report", type=Path, help="optional markdown plan report")
 
     sanitize = subparsers.add_parser("sanitize-build", help="build a single C file with sanitizers")
     sanitize.add_argument("--root", type=Path, required=True, help="workspace root")
@@ -99,6 +105,15 @@ def main() -> int:
             f"audited {result.scan.files_scanned} files; findings={len(result.scan.findings)}; "
             f"commands={len(result.command_logs)}; wrote {args.report}"
         )
+        return 0
+
+    if args.command == "plan-audit":
+        summary = load_audit_summary(args.audit_json)
+        plan = build_plan(summary)
+        write_plan(args.output, plan)
+        if args.report:
+            write_report(args.report, render_plan_markdown(plan))
+        print(f"planned {len(plan.next_actions)} actions; wrote {args.output}")
         return 0
 
     if args.command == "sanitize-build":
