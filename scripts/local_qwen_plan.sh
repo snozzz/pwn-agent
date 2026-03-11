@@ -26,25 +26,27 @@ if [ ! -f "$AUDIT_JSON" ]; then
   exit 1
 fi
 
-PROMPT=$(cat <<'EOF'
+SCHEMA_FILE="$(cd "$(dirname "$0")/.." && pwd)/tmp_local_plan_schema.json"
+PROMPT_FILE="$(mktemp)"
+trap 'rm -f "$PROMPT_FILE"' EXIT
+
+cat > "$PROMPT_FILE" <<'EOF'
 You are the planning brain for a defensive C/C++ security audit agent.
-Read the audit summary and respond with ONLY valid JSON.
-Do not use markdown. Do not explain first. Do not add prose before or after the JSON.
-Return exactly this schema:
-{
-  "assessment": "string",
-  "top_risks": ["string"],
-  "next_actions": ["string"],
-  "confidence": "low|medium|high"
-}
-Keep it short and concrete. Prefer actions that fit the existing bounded tool workflow.
+Read the audit summary and produce a short structured planning result.
+Prefer actions that fit the existing bounded tool workflow.
 Prioritize verified evidence over heuristic findings.
-
-AUDIT_JSON:
 EOF
-)
+printf '\nAUDIT_JSON:\n' >> "$PROMPT_FILE"
+cat "$AUDIT_JSON" >> "$PROMPT_FILE"
 
-{
-  printf "%s\n" "$PROMPT"
-  cat "$AUDIT_JSON"
-} | "$LLAMA_CLI" -m "$MODEL_PATH" -c "$CTX_SIZE" -n 512 --temp 0.2 --top-p 0.9 --no-display-prompt
+"$LLAMA_CLI" \
+  --no-conversation \
+  --simple-io \
+  --no-display-prompt \
+  --json-schema-file "$SCHEMA_FILE" \
+  -m "$MODEL_PATH" \
+  -f "$PROMPT_FILE" \
+  -c "$CTX_SIZE" \
+  -n 256 \
+  --temp 0.2 \
+  --top-p 0.9

@@ -1,0 +1,1 @@
+{"type":"object","properties":{"assessment":{"type":"string"},"top_risks":{"type":"array","items":{"type":"string"}},"next_actions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"string","enum":["low","medium","high"]}},"required":["assessment","top_risks","next_actions","confidence"],"additionalProperties":false}
