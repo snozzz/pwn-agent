@@ -28,9 +28,17 @@ fi
 
 PROMPT=$(cat <<'EOF'
 You are the planning brain for a defensive C/C++ security audit agent.
-Read the audit summary and respond in JSON with keys:
-assessment, top_risks, next_actions, confidence.
+Read the audit summary and respond with ONLY valid JSON.
+Do not use markdown. Do not explain first. Do not add prose before or after the JSON.
+Return exactly this schema:
+{
+  "assessment": "string",
+  "top_risks": ["string"],
+  "next_actions": ["string"],
+  "confidence": "low|medium|high"
+}
 Keep it short and concrete. Prefer actions that fit the existing bounded tool workflow.
+Prioritize verified evidence over heuristic findings.
 
 AUDIT_JSON:
 EOF
