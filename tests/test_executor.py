@@ -52,6 +52,8 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.status_counts["dry-run"], 1)
             self.assertEqual(summary.records[0].status, "dry-run")
             self.assertEqual(summary.records[0].phase, "execution")
+            self.assertEqual(summary.action_states["verify-existing-binary"], "dry-run")
+            self.assertEqual(summary.transition_count, 2)
 
     def test_execute_plan_runs_allowlisted_internal_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -106,6 +108,8 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.completed_action_ids, ["run-rebuild-plan"])
             self.assertEqual(summary.remaining_runnable_action_ids, [])
             self.assertEqual(summary.next_action_ids, [])
+            self.assertEqual(summary.action_states["run-rebuild-plan"], "completed")
+            self.assertEqual(summary.transition_count, 3)
             self.assertIn("targets=1", summary.records[0].stdout)
 
     def test_execute_plan_respects_phase_filter(self) -> None:
@@ -292,6 +296,70 @@ class ExecutorTests(unittest.TestCase):
                 summary.next_action_ids,
                 ["run-rebuild-verify", "verify-existing-binary"],
             )
+            self.assertEqual(summary.action_states["run-rebuild-verify"], "deferred")
+            self.assertEqual(summary.action_states["verify-existing-binary"], "deferred")
+
+    def test_execute_plan_can_resume_from_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state.json"
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "next_actions": [
+                            {
+                                "id": "rebuild-target-1",
+                                "kind": "rebuild_target",
+                                "phase": "execution",
+                                "title": "Rebuild target",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                            {
+                                "id": "verify-existing-binary",
+                                "kind": "verify_binary",
+                                "phase": "execution",
+                                "title": "Verify current binary",
+                                "status": "ready",
+                                "priority": 90,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = execute_plan(plan_path, max_actions=1, dry_run=True, state_path=state_path)
+            resumed = execute_plan(plan_path, max_actions=1, dry_run=True, state_path=state_path)
+
+            self.assertFalse(first.resumed_from_state)
+            self.assertTrue(resumed.resumed_from_state)
+            self.assertEqual(first.selected_action_ids, ["rebuild-target-1"])
+            self.assertEqual(resumed.resumed_completed_action_ids, ["rebuild-target-1"])
+            self.assertEqual(resumed.selected_action_ids, ["verify-existing-binary"])
+            self.assertEqual(resumed.action_states["rebuild-target-1"], "dry-run")
+            self.assertEqual(resumed.action_states["verify-existing-binary"], "dry-run")
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state_payload["completed_action_ids"], ["rebuild-target-1", "verify-existing-binary"])
+            self.assertGreaterEqual(len(state_payload["history"]), 4)
 
     def test_execute_plan_raises_for_missing_phase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

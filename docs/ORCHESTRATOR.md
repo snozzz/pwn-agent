@@ -11,6 +11,7 @@ The project now includes a staged orchestration layer.
 - tracks whether each action is contextual, directly executable, or blocked on missing prerequisites
 - groups actions into explicit phases so a downstream loop can separate triage, execution, and synthesis work
 - preserves runnable execution actions even after verification already produced a signal
+- exports staged audit history so downstream tooling can inspect discovery/execution/synthesis separately
 - optionally feeds those ready actions into a minimal bounded `run-plan` executor
 
 ## Current action kinds
@@ -56,11 +57,18 @@ Plans now also include a `stage_guidance` block with:
 - `stage_heads` pointing at the highest-priority action in each phase
 - `blocked_action_ids` so prerequisite work stays visible
 
+Audit summaries now also include a `staged_history` block with:
+
+- discovery, execution, and synthesis event groups
+- per-stage event counts
+- per-stage status counts
+- the original trace events nested under the relevant stage
+
 That gives a downstream loop a tighter control surface than raw audit output.
 
 ## Minimal executor loop
 
-`python3 -m src.main run-plan --plan out/plan.json --output out/exec.json`
+`python3 -m src.main run-plan --plan out/plan.json --output out/exec.json --state out/state.json`
 
 Current behavior is intentionally narrow:
 
@@ -72,7 +80,7 @@ Current behavior is intentionally narrow:
 - `depends_on` is respected during selection, so rebuild+verify can stay gated behind target enumeration/rebuild steps
 - `--dry-run` validates and reports what would execute without actually running it
 - each run emits a structured execution summary for downstream tooling
-- execution summaries now include runnable/deferred action inventory so a controller can see what remains blocked only by ordering
+- execution summaries now include runnable/deferred action inventory, explicit state transitions, and resume metadata
 
 ## Why this matters
 

@@ -66,8 +66,8 @@ def build_audit_summary(result: WorkflowResult) -> dict[str, object]:
                     "argv": result.rebuild_verify.verification.argv,
                     "returncode": result.rebuild_verify.verification.returncode,
                     "sanitizer_signal": result.rebuild_verify.verification.sanitizer_signal,
-            }
-        )
+                }
+            )
 
     verification_plan_path = root / "verification-plan.json"
     verification_plan = VerificationPlan.load(verification_plan_path) if verification_plan_path.exists() else None
@@ -80,6 +80,7 @@ def build_audit_summary(result: WorkflowResult) -> dict[str, object]:
         verification=result.verification,
         rebuild_verify=result.rebuild_verify,
     )
+    staged_history = _build_staged_history(result)
 
     return {
         "root": result.scan.root,
@@ -158,6 +159,7 @@ def build_audit_summary(result: WorkflowResult) -> dict[str, object]:
         ],
         "compile_database": result.compile_db_summary,
         "execution_readiness": execution_readiness,
+        "staged_history": staged_history,
         "verification": (
             {
                 "binary": result.verification.binary,
@@ -493,3 +495,61 @@ def _build_execution_readiness(
         "blocked_actions": blocked_actions,
         "missing_prerequisites": sorted(set(missing_prerequisites)),
     }
+
+
+def _build_staged_history(result: WorkflowResult) -> dict[str, Any]:
+    stage_events: dict[str, list[dict[str, Any]]] = {
+        "discovery": [],
+        "execution": [],
+        "synthesis": [],
+    }
+    stage_status_counts: dict[str, dict[str, int]] = {
+        "discovery": {},
+        "execution": {},
+        "synthesis": {},
+    }
+
+    for event in result.trace.events:
+        stage = _trace_stage(event.step)
+        stage_events[stage].append(
+            {
+                "step": event.step,
+                "status": event.status,
+                "details": event.details,
+            }
+        )
+        counts = stage_status_counts[stage]
+        counts[event.status] = counts.get(event.status, 0) + 1
+
+    return {
+        "stages": [
+            {
+                "name": name,
+                "event_count": len(events),
+                "status_counts": dict(sorted(stage_status_counts[name].items())),
+                "events": events,
+            }
+            for name, events in stage_events.items()
+        ],
+        "stage_order": [name for name in stage_events if stage_events[name]],
+    }
+
+
+def _trace_stage(step: str) -> str:
+    if step in {
+        "project-discovery",
+        "function-detection",
+        "source-scan",
+        "input-surface-detection",
+        "compile-db",
+    }:
+        return "discovery"
+    if step in {
+        "verification-plan",
+        "verification-binary",
+        "verification-run",
+        "rebuild-target-selection",
+        "rebuild-verify",
+    }:
+        return "execution"
+    return "synthesis"

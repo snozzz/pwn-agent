@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_plan.add_argument("--plan", type=Path, required=True, help="input orchestration plan json")
     run_plan.add_argument("--output", type=Path, required=True, help="output execution summary json")
     run_plan.add_argument("--report", type=Path, help="optional markdown execution report")
+    run_plan.add_argument("--state", type=Path, help="optional persisted execution state json for resume support")
     run_plan.add_argument("--action-id", help="optional specific ready action id to execute")
     run_plan.add_argument("--phase", choices=["triage", "execution", "synthesis"], help="optional phase filter for ready actions")
     run_plan.add_argument("--max-actions", type=int, default=1, help="maximum number of ready actions to execute")
@@ -135,6 +136,7 @@ def main() -> int:
             max_actions=args.max_actions,
             dry_run=args.dry_run,
             timeout_seconds=args.timeout,
+            state_path=args.state,
         )
         write_execution_summary(args.output, summary)
         if args.report:
