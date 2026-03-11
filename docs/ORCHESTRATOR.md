@@ -49,6 +49,13 @@ The top-level plan also includes a `readiness` block with:
 - verification/rebuild state
 - missing prerequisites
 
+Plans now also include a `stage_guidance` block with:
+
+- `recommended_action_ids` for the next bounded loop turn
+- `recommended_phase` so a controller can keep the audit staged
+- `stage_heads` pointing at the highest-priority action in each phase
+- `blocked_action_ids` so prerequisite work stays visible
+
 That gives a downstream loop a tighter control surface than raw audit output.
 
 ## Minimal executor loop

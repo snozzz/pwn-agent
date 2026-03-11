@@ -78,6 +78,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("run-rebuild-verify", ids)
         self.assertEqual(plan.readiness["runnable_actions"], 4)
         self.assertEqual(plan.readiness["phase_counts"]["execution"], 4)
+        self.assertEqual(
+            plan.stage_guidance["recommended_action_ids"],
+            ["list-rebuild-targets", "verify-existing-binary", "rebuild-target-1"],
+        )
+        self.assertEqual(plan.stage_guidance["recommended_phase"], "execution")
+        self.assertEqual(plan.stage_guidance["stage_heads"]["triage"], "focus-function-1")
+        self.assertEqual(plan.stage_guidance["stage_heads"]["execution"], "list-rebuild-targets")
+        self.assertEqual(plan.stage_guidance["stage_heads"]["synthesis"], "explain-root-cause")
 
     def test_render_plan_markdown_includes_phase_and_runnable_counts(self) -> None:
         summary = {
@@ -101,6 +109,8 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertIn("Runnable actions: 0", rendered)
         self.assertIn("Phase counts:", rendered)
+        self.assertIn("Recommended next actions:", rendered)
+        self.assertIn("Stage heads:", rendered)
 
 
 if __name__ == "__main__":

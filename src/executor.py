@@ -35,9 +35,12 @@ class ExecutionSummary:
     plan_path: str
     executed: int
     selected_action_ids: list[str]
+    completed_action_ids: list[str]
     stopped_reason: str
     runnable_action_ids: list[str]
     deferred_action_ids: list[str]
+    remaining_runnable_action_ids: list[str]
+    next_action_ids: list[str]
     status_counts: dict[str, int]
     records: list[ExecutionRecord]
 
@@ -46,9 +49,12 @@ class ExecutionSummary:
             "plan_path": self.plan_path,
             "executed": self.executed,
             "selected_action_ids": self.selected_action_ids,
+            "completed_action_ids": self.completed_action_ids,
             "stopped_reason": self.stopped_reason,
             "runnable_action_ids": self.runnable_action_ids,
             "deferred_action_ids": self.deferred_action_ids,
+            "remaining_runnable_action_ids": self.remaining_runnable_action_ids,
+            "next_action_ids": self.next_action_ids,
             "status_counts": self.status_counts,
             "records": [asdict(record) for record in self.records],
         }
@@ -73,7 +79,8 @@ def execute_plan(
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     actions = list(plan.get("next_actions", []))
 
-    selected, runnable_ids, deferred_ids = _select_actions(actions, action_id=action_id, phase=phase, max_actions=max_actions)
+    filtered_actions = _filter_runnable_actions(actions, action_id=action_id, phase=phase)
+    selected, runnable_ids, deferred_ids = _select_actions(filtered_actions, max_actions=max_actions)
     records: list[ExecutionRecord] = []
     stopped_reason = "no-executable-actions"
     completed_ids: set[str] = set()
@@ -133,13 +140,18 @@ def execute_plan(
         "failed": sum(1 for record in records if record.status == "failed"),
         "dry-run": sum(1 for record in records if record.status == "dry-run"),
     }
+    remaining_runnable_ids = [action_id for action_id in runnable_ids if action_id not in completed_ids]
+    next_action_ids = _select_followup_actions(filtered_actions, completed_ids=completed_ids, limit=3)
     return ExecutionSummary(
         plan_path=str(plan_path),
         executed=sum(1 for record in records if record.status in {"ok", "failed"}),
         selected_action_ids=[action["id"] for action in selected],
+        completed_action_ids=[action["id"] for action in selected if action["id"] in completed_ids],
         stopped_reason=stopped_reason,
         runnable_action_ids=runnable_ids,
         deferred_action_ids=deferred_ids,
+        remaining_runnable_action_ids=remaining_runnable_ids,
+        next_action_ids=next_action_ids,
         status_counts=status_counts,
         records=records,
     )
@@ -157,10 +169,16 @@ def render_execution_markdown(summary: ExecutionSummary) -> str:
     lines.append(f"- Stopped reason: {summary.stopped_reason}")
     if summary.selected_action_ids:
         lines.append(f"- Selected actions: {', '.join(summary.selected_action_ids)}")
+    if summary.completed_action_ids:
+        lines.append(f"- Completed actions: {', '.join(summary.completed_action_ids)}")
     if summary.runnable_action_ids:
         lines.append(f"- Runnable actions: {', '.join(summary.runnable_action_ids)}")
     if summary.deferred_action_ids:
         lines.append(f"- Deferred actions: {', '.join(summary.deferred_action_ids)}")
+    if summary.remaining_runnable_action_ids:
+        lines.append(f"- Remaining runnable actions: {', '.join(summary.remaining_runnable_action_ids)}")
+    if summary.next_action_ids:
+        lines.append(f"- Next actions: {', '.join(summary.next_action_ids)}")
     if summary.status_counts:
         lines.append(
             "- Status counts: " + ", ".join(f"{key}={value}" for key, value in sorted(summary.status_counts.items()))
@@ -188,13 +206,12 @@ def render_execution_markdown(summary: ExecutionSummary) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _select_actions(
+def _filter_runnable_actions(
     actions: list[dict[str, Any]],
     *,
     action_id: str | None,
     phase: str | None,
-    max_actions: int,
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+) -> list[dict[str, Any]]:
     runnable = [
         action
         for action in actions
@@ -208,6 +225,14 @@ def _select_actions(
         runnable = [action for action in runnable if action.get("id") == action_id]
         if not runnable:
             raise ExecutorError(f"ready action not found: {action_id}")
+    return runnable
+
+
+def _select_actions(
+    runnable: list[dict[str, Any]],
+    *,
+    max_actions: int,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
 
     indexed = {action.get("id"): action for action in runnable if action.get("id")}
     ordered = sorted(
@@ -245,6 +270,49 @@ def _select_actions(
 
     runnable_ids = [action["id"] for action in ordered if action.get("id")]
     return selected, runnable_ids, deferred_ids
+
+
+def _select_followup_actions(
+    runnable: list[dict[str, Any]],
+    *,
+    completed_ids: set[str],
+    limit: int,
+) -> list[str]:
+    remaining = [action for action in runnable if action.get("id") not in completed_ids]
+    if not remaining or limit < 1:
+        return []
+
+    indexed = {action.get("id"): action for action in remaining if action.get("id")}
+    ordered = sorted(
+        remaining,
+        key=lambda item: (_phase_rank(item.get("phase")), int(item.get("priority", 0)), item.get("id", "")),
+        reverse=True,
+    )
+    selected: list[str] = []
+    progressed_ids = set(completed_ids)
+
+    while ordered and len(selected) < limit:
+        progressed = False
+        deferred: list[dict[str, Any]] = []
+        skipped_tail: list[dict[str, Any]] = []
+        for index, action in enumerate(ordered):
+            depends_on = list(action.get("depends_on") or [])
+            if any(dependency in indexed and dependency not in progressed_ids for dependency in depends_on):
+                deferred.append(action)
+                continue
+            action_id = action.get("id")
+            if action_id:
+                selected.append(action_id)
+                progressed_ids.add(action_id)
+            progressed = True
+            if len(selected) >= limit:
+                skipped_tail = ordered[index + 1 :]
+                break
+        if not progressed:
+            break
+        ordered = deferred + skipped_tail
+
+    return selected
 
 
 def _phase_rank(phase: str | None) -> int:

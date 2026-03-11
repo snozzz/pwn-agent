@@ -29,6 +29,7 @@ class OrchestrationPlan:
     top_risks: list[str]
     evidence_used: list[str]
     readiness: dict[str, Any]
+    stage_guidance: dict[str, Any]
     next_actions: list[PlannedAction]
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +38,7 @@ class OrchestrationPlan:
             "top_risks": self.top_risks,
             "evidence_used": self.evidence_used,
             "readiness": self.readiness,
+            "stage_guidance": self.stage_guidance,
             "next_actions": [asdict(action) for action in self.next_actions],
         }
 
@@ -160,6 +162,7 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
     runnable_actions = sum(1 for action in actions if action.status == "ready" and action.suggested_cli)
     blocked_actions = sum(1 for action in actions if action.status == "blocked")
     context_actions = sum(1 for action in actions if action.status == "context")
+    stage_guidance = _build_stage_guidance(actions)
 
     assessment = _build_assessment(scan_summary, verified_signal, file_hotspots, function_hotspots)
     return OrchestrationPlan(
@@ -176,6 +179,7 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
             "verification_state": readiness.get("verification_state"),
             "rebuild_state": readiness.get("rebuild_state"),
         },
+        stage_guidance=stage_guidance,
         next_actions=actions,
     )
 
@@ -219,6 +223,25 @@ def render_plan_markdown(plan: OrchestrationPlan) -> str:
         lines.extend([f"- {item}" for item in plan.evidence_used])
     else:
         lines.append("- none")
+    lines.extend(["", "## Stage Guidance", ""])
+    recommended = plan.stage_guidance.get("recommended_action_ids", [])
+    if recommended:
+        lines.append(f"- Recommended next actions: {', '.join(recommended)}")
+    else:
+        lines.append("- Recommended next actions: none")
+    if plan.stage_guidance.get("recommended_phase"):
+        lines.append(f"- Recommended phase: {plan.stage_guidance['recommended_phase']}")
+    stage_heads = plan.stage_guidance.get("stage_heads", {})
+    if stage_heads:
+        lines.append(
+            "- Stage heads: "
+            + ", ".join(f"{phase}={action_id}" for phase, action_id in sorted(stage_heads.items()))
+        )
+    else:
+        lines.append("- Stage heads: none")
+    blocked = plan.stage_guidance.get("blocked_action_ids", [])
+    if blocked:
+        lines.append(f"- Blocked candidates: {', '.join(blocked)}")
     lines.extend(["", "## Next Actions", ""])
     if plan.next_actions:
         for action in plan.next_actions:
@@ -517,6 +540,81 @@ def _count_by_phase(actions: list[PlannedAction]) -> dict[str, int]:
     for action in actions:
         counts[action.phase] = counts.get(action.phase, 0) + 1
     return counts
+
+
+def _build_stage_guidance(actions: list[PlannedAction]) -> dict[str, Any]:
+    stage_heads: dict[str, str] = {}
+    blocked_action_ids: list[str] = []
+
+    for phase in ("triage", "execution", "synthesis"):
+        candidates = [action for action in actions if action.phase == phase]
+        if not candidates:
+            continue
+        ranked = sorted(candidates, key=lambda item: (int(item.priority), item.id), reverse=True)
+        stage_heads[phase] = ranked[0].id
+
+    runnable = [action for action in actions if action.status == "ready" and action.suggested_cli]
+    recommended = _select_recommended_actions(runnable, max_actions=3)
+    if not recommended:
+        context_actions = [action for action in actions if action.status == "context"]
+        recommended = [action.id for action in sorted(context_actions, key=lambda item: (int(item.priority), item.id), reverse=True)[:3]]
+
+    blocked_action_ids = [
+        action.id
+        for action in sorted(
+            [action for action in actions if action.status == "blocked"],
+            key=lambda item: (int(item.priority), item.id),
+            reverse=True,
+        )[:3]
+    ]
+
+    recommended_phase = None
+    if recommended:
+        recommended_phase = next((action.phase for action in actions if action.id == recommended[0]), None)
+
+    return {
+        "recommended_action_ids": recommended,
+        "recommended_phase": recommended_phase,
+        "stage_heads": stage_heads,
+        "blocked_action_ids": blocked_action_ids,
+    }
+
+
+def _select_recommended_actions(actions: list[PlannedAction], *, max_actions: int) -> list[str]:
+    indexed = {action.id: action for action in actions}
+    ordered = sorted(actions, key=lambda item: (_phase_rank(item.phase), int(item.priority), item.id), reverse=True)
+    selected: list[str] = []
+    completed: set[str] = set()
+    remaining = list(ordered)
+
+    while remaining and len(selected) < max_actions:
+        progressed = False
+        deferred: list[PlannedAction] = []
+        skipped_tail: list[PlannedAction] = []
+        for index, action in enumerate(remaining):
+            if any(dep in indexed and dep not in completed for dep in action.depends_on):
+                deferred.append(action)
+                continue
+            selected.append(action.id)
+            completed.add(action.id)
+            progressed = True
+            if len(selected) >= max_actions:
+                skipped_tail = remaining[index + 1 :]
+                break
+        if not progressed:
+            break
+        remaining = deferred + skipped_tail
+
+    return selected
+
+
+def _phase_rank(phase: str | None) -> int:
+    order = {
+        "triage": 1,
+        "execution": 2,
+        "synthesis": 3,
+    }
+    return order.get(phase or "execution", 0)
 
 
 def _build_assessment(
