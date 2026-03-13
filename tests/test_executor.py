@@ -497,6 +497,108 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaises(ExecutorError):
                 execute_plan(plan_path, phase="execution", dry_run=True)
 
+    def test_execute_plan_rejects_disallowed_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "bad-subcommand",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Bad subcommand",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "evil-command",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError):
+                execute_plan(plan_path, dry_run=True)
+
+    def test_execute_plan_rejects_malformed_suggested_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "missing-root",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Missing root option",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError):
+                execute_plan(plan_path, dry_run=True)
+
+    def test_execute_plan_rejects_action_root_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            other = root / "other"
+            other.mkdir()
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "wrong-root",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Wrong root in action",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(other),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError):
+                execute_plan(plan_path, dry_run=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from typing import Any
 
+from ...command_registry import get_command_rule
 from ...config import AgentConfig
 from ...policy import CommandPolicy, CommandResult, PolicyError
 
@@ -338,6 +339,7 @@ def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
         "schema": PLAN_SCHEMA,
         "schema_version": 1,
         "mode": "binary",
+        "root": root,
         "stage_order": list(STAGE_ORDER),
         "source_analysis_schema": analysis.get("schema"),
         "binary_path": binary_path,
@@ -442,6 +444,8 @@ def _collect_tool_evidence(policy: CommandPolicy, spec: dict[str, Any], binary: 
 
     if tool not in policy.allowlist:
         return _unavailable_evidence(spec, argv, reason="blocked-by-policy")
+    if get_command_rule(tool) is None:
+        return _unavailable_evidence(spec, argv, reason="missing-command-policy")
     if shutil.which(tool) is None:
         return _unavailable_evidence(spec, argv, reason="tool-not-found")
 

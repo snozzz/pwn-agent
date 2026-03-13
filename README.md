@@ -74,8 +74,9 @@ python3 -m src.main binary-verify --root examples --binary examples/vuln_demo_as
 The command-execution layer is intentionally constrained:
 
 - workspace-bounded cwd
-- explicit command allowlist
+- explicit command policy registry (`src/command_registry.py`) with per-command argument rules
 - fixed timeout for command execution
+- per-command output truncation policy
 - no shell passthrough by default
 
 Binary mode stays bounded to local tooling and bounded local binary execution; it does not provide unrestricted shell execution or unattended remote exploitation flows.

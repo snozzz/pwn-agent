@@ -53,8 +53,10 @@ Current command mapping:
 ## Safety and bounded execution
 
 - workspace-bounded command policy
-- explicit command allowlist
-- fixed command timeout
+- explicit command registry with per-command argument validation
+- path-like argument binding to workspace/root
+- fixed command timeout (with per-command overrides when defined)
+- per-command output truncation policy
 - local execution only
 - no shell passthrough
 

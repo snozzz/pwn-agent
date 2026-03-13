@@ -16,6 +16,8 @@ The executor now produces a richer execution summary and can persist bounded run
 - status counts for downstream orchestration
 - per-action state counts (`queued`, `deferred`, `running`, `completed`, `failed`, `previewed`, etc.)
 - explicit transition entries showing how each selected action moved through the loop
+- shared command-policy validation for internal `python3 -m src.main ...` actions
+- root consistency checks so action `--root` must match the plan/workflow root
 
 ## Resume support
 

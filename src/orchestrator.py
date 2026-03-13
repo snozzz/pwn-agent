@@ -31,6 +31,7 @@ class PlannedAction:
 class OrchestrationPlan:
     schema_version: int
     plan_fingerprint: str
+    root: str
     assessment: str
     top_risks: list[str]
     evidence_used: list[str]
@@ -42,6 +43,7 @@ class OrchestrationPlan:
         return {
             "schema_version": self.schema_version,
             "plan_fingerprint": self.plan_fingerprint,
+            "root": self.root,
             "assessment": self.assessment,
             "top_risks": self.top_risks,
             "evidence_used": self.evidence_used,
@@ -177,6 +179,7 @@ def build_plan(summary: dict[str, Any]) -> OrchestrationPlan:
     return OrchestrationPlan(
         schema_version=PLAN_SCHEMA_VERSION,
         plan_fingerprint=plan_fingerprint,
+        root=str(Path(root).resolve()),
         assessment=assessment,
         top_risks=top_risks,
         evidence_used=evidence_used,

@@ -7,16 +7,10 @@ import json
 import subprocess
 from typing import Any
 
+from .command_registry import validate_main_cli
+
 
 MODULE_ROOT = Path(__file__).resolve().parents[1]
-
-ALLOWED_MAIN_SUBCOMMANDS = {
-    "verify-run",
-    "rebuild-target",
-    "rebuild-verify",
-    "rebuild-plan",
-    "binary-verify",
-}
 
 
 @dataclass
@@ -160,6 +154,7 @@ def execute_plan(
 
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     actions = list(plan.get("next_actions", []))
+    workflow_root = _resolve_plan_root(plan, actions=actions)
     plan_schema_version = _parse_plan_schema_version(plan)
     plan_fingerprint = plan.get("plan_fingerprint")
     state, resumed_from_state = _load_state(
@@ -198,7 +193,7 @@ def execute_plan(
     _refresh_passive_states(state, actions, runnable_ids=runnable_ids, deferred_ids=deferred_ids)
 
     for action in selected:
-        argv = _validate_suggested_cli(action)
+        argv = _validate_suggested_cli(action, expected_root=workflow_root)
         _transition(state, transitions, action, "selected", reason="selected-for-execution")
         if dry_run:
             records.append(
@@ -700,6 +695,28 @@ def _parse_plan_schema_version(plan: dict[str, Any]) -> int | None:
         return None
 
 
+def _resolve_plan_root(plan: dict[str, Any], *, actions: list[dict[str, Any]]) -> Path | None:
+    explicit_root = plan.get("root")
+    if explicit_root:
+        resolved = Path(str(explicit_root)).resolve()
+        if not resolved.exists() or not resolved.is_dir():
+            raise ExecutorError(f"invalid plan root: {resolved}")
+        return resolved
+
+    inferred_roots = sorted(
+        {
+            str(root)
+            for action in actions
+            if (root := _extract_root(list(action.get("suggested_cli") or []))) is not None
+        }
+    )
+    if not inferred_roots:
+        return None
+    if len(inferred_roots) > 1:
+        raise ExecutorError(f"plan contains multiple roots: {', '.join(inferred_roots)}")
+    return Path(inferred_roots[0]).resolve()
+
+
 def _action_signature(action: dict[str, Any]) -> str:
     payload = {
         "kind": action.get("kind"),
@@ -724,29 +741,27 @@ def _phase_rank(phase: str | None) -> int:
     return order.get(phase or "execution", 0)
 
 
-def _validate_suggested_cli(action: dict[str, Any]) -> list[str]:
+def _validate_suggested_cli(action: dict[str, Any], *, expected_root: Path | None) -> list[str]:
     argv = list(action.get("suggested_cli") or [])
-    if len(argv) < 4:
-        raise ExecutorError(f"unsupported suggested_cli for action {action.get('id')}: too short")
-    if argv[0] != "python3" or argv[1:3] != ["-m", "src.main"]:
-        raise ExecutorError(f"unsupported suggested_cli for action {action.get('id')}: {_shell_join(argv)}")
-    if argv[3] not in ALLOWED_MAIN_SUBCOMMANDS:
-        raise ExecutorError(
-            f"subcommand not allowed for action {action.get('id')}: {argv[3]}"
+    try:
+        validated, _ = validate_main_cli(
+            argv,
+            workspace_root=expected_root,
+            expected_root=expected_root,
+            cwd=MODULE_ROOT,
         )
-    root = _extract_root(argv)
-    if not root.exists() or not root.is_dir():
-        raise ExecutorError(f"invalid --root for action {action.get('id')}: {root}")
-    return argv
+    except ValueError as exc:
+        raise ExecutorError(f"unsupported suggested_cli for action {action.get('id')}: {exc}") from exc
+    return validated
 
 
-def _extract_root(argv: list[str]) -> Path:
+def _extract_root(argv: list[str]) -> Path | None:
     try:
         root_index = argv.index("--root")
-    except ValueError as exc:
-        raise ExecutorError(f"suggested_cli missing --root: {_shell_join(argv)}") from exc
+    except ValueError:
+        return None
     if root_index + 1 >= len(argv):
-        raise ExecutorError(f"suggested_cli has empty --root: {_shell_join(argv)}")
+        return None
     return Path(argv[root_index + 1]).resolve()
 
 
