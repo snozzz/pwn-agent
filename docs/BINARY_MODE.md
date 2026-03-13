@@ -6,7 +6,9 @@
 
 - local ELF or executable binary path (`--binary`)
 - workspace root (`--root`)
-- optional stdin sample file (`--stdin-sample`)
+- optional stdin file (`--stdin-file`)
+- optional runtime argument hint list (`--args ...`)
+- optional timeout override (`--timeout`)
 - optional protocol/input sample file (`--protocol-sample`)
 
 ## Outputs
@@ -19,6 +21,7 @@ Binary mode emits separate artifacts from source-audit outputs:
 - `binary-run` uses the bounded plan executor and writes an execution summary for plan progress
 
 These schemas are intentionally separate from `audit.json` to avoid conflating source-level and binary-level evidence.
+See [BINARY_AUDIT_EXAMPLE.json](/home/snoz/pwn-agent/docs/BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
 
 ## Supported stages
 
@@ -37,6 +40,15 @@ Current command mapping:
 - `binary-plan` emits stage-aware next actions
 - `binary-run` executes bounded ready actions (for example `binary-verify`)
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
+
+`binary-scan` evidence collection is bounded to local tools:
+
+- `file`
+- `checksec` (if available)
+- `readelf`
+- `objdump`
+- `nm`
+- `strings` (truncated)
 
 ## Safety and bounded execution
 

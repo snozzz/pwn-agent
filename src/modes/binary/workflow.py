@@ -1,17 +1,95 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import json
+import re
+import shutil
 import subprocess
 from typing import Any
 
 from ...config import AgentConfig
-from ...policy import CommandPolicy, CommandResult
+from ...policy import CommandPolicy, CommandResult, PolicyError
 
 ANALYSIS_SCHEMA = "pwn-agent.binary-analysis.v1"
 PLAN_SCHEMA = "pwn-agent.binary-plan.v1"
 VERIFY_SCHEMA = "pwn-agent.binary-verify.v1"
 STAGE_ORDER = ["identify", "inspect", "triage", "validate", "patch", "revalidate"]
+
+_TOOL_SPECS = [
+    {"id": "file", "tool": "file", "build_argv": lambda binary: ["file", str(binary)], "stdout_lines": 80, "stdout_chars": 12000},
+    {
+        "id": "checksec",
+        "tool": "checksec",
+        "build_argv": lambda binary: ["checksec", "--file", str(binary)],
+        "stdout_lines": 80,
+        "stdout_chars": 12000,
+    },
+    {
+        "id": "readelf-header",
+        "tool": "readelf",
+        "build_argv": lambda binary: ["readelf", "-h", str(binary)],
+        "stdout_lines": 120,
+        "stdout_chars": 18000,
+    },
+    {
+        "id": "readelf-symbols",
+        "tool": "readelf",
+        "build_argv": lambda binary: ["readelf", "-Ws", str(binary)],
+        "stdout_lines": 400,
+        "stdout_chars": 32000,
+    },
+    {
+        "id": "objdump-headers",
+        "tool": "objdump",
+        "build_argv": lambda binary: ["objdump", "-x", str(binary)],
+        "stdout_lines": 300,
+        "stdout_chars": 32000,
+    },
+    {
+        "id": "nm-symbols",
+        "tool": "nm",
+        "build_argv": lambda binary: ["nm", "-an", str(binary)],
+        "stdout_lines": 400,
+        "stdout_chars": 32000,
+    },
+    {
+        "id": "strings",
+        "tool": "strings",
+        "build_argv": lambda binary: ["strings", "-n", "6", str(binary)],
+        "stdout_lines": 200,
+        "stdout_chars": 18000,
+    },
+]
+
+_SUSPICIOUS_IMPORTS = {
+    "strcpy",
+    "strcat",
+    "gets",
+    "sprintf",
+    "vsprintf",
+    "system",
+    "popen",
+    "execve",
+    "memcpy",
+}
+
+_STRING_MARKERS = [
+    "strcpy",
+    "strcat",
+    "gets",
+    "sprintf",
+    "system(",
+    "popen",
+    "/bin/sh",
+    "execve",
+    "password",
+    "token",
+    "api_key",
+    "secret",
+    "http://",
+    "https://",
+]
 
 
 def write_binary_json(path: Path, payload: dict[str, Any]) -> None:
@@ -30,73 +108,159 @@ def scan_binary(
     *,
     root: Path,
     binary: Path,
+    stdin_file: Path | None = None,
+    args: list[str] | None = None,
+    timeout_seconds: int | None = None,
+    config: AgentConfig | None = None,
     stdin_sample: Path | None = None,
     protocol_sample: Path | None = None,
-    config: AgentConfig | None = None,
 ) -> dict[str, Any]:
     resolved_root = root.resolve()
     resolved_binary = binary.resolve()
     if not resolved_binary.exists() or not resolved_binary.is_file():
         raise ValueError(f"binary not found: {resolved_binary}")
 
+    effective_stdin_file = stdin_file or stdin_sample
+    runtime_args = list(args or [])
+
     cfg = config or AgentConfig()
     policy = CommandPolicy(
         resolved_root,
         allowlist=cfg.allowlist,
-        timeout_seconds=cfg.timeout_seconds,
+        timeout_seconds=(int(timeout_seconds) if timeout_seconds is not None else cfg.timeout_seconds),
     )
 
-    file_result = policy.run(["file", str(resolved_binary)])
-    elf_header_result = policy.run(["readelf", "-h", str(resolved_binary)])
-    symbol_result = policy.run(["readelf", "-s", str(resolved_binary)])
-    string_result = policy.run(["strings", "-n", "6", str(resolved_binary)])
-    nm_result = policy.run(["nm", "-an", str(resolved_binary)])
+    evidence = [_collect_tool_evidence(policy, spec, resolved_binary) for spec in _TOOL_SPECS]
+    evidence_by_id = {entry["id"]: entry for entry in evidence}
 
-    risk_markers = _detect_risk_markers(string_result.stdout)
+    file_type = _first_line(_stdout_lines(evidence_by_id.get("file")))
+    elf_header = _parse_elf_header(_stdout_lines(evidence_by_id.get("readelf-header")))
+    imports = _extract_imported_functions(_stdout_lines(evidence_by_id.get("readelf-symbols")))
+    exported_symbol_count = _count_exported_symbols(_stdout_lines(evidence_by_id.get("nm-symbols")))
+    strings_lines = _stdout_lines(evidence_by_id.get("strings"))
+    strings_highlights = _extract_strings_highlights(strings_lines)
+    suspicious_indicators = _build_suspicious_indicators(imports, strings_highlights)
+    mitigations = _parse_checksec_mitigations(evidence_by_id.get("checksec"))
 
     return {
         "schema": ANALYSIS_SCHEMA,
         "schema_version": 1,
+        "artifact_type": "binary_audit",
         "mode": "binary",
         "stages_supported": list(STAGE_ORDER),
+        "target": {
+            "root": str(resolved_root),
+            "binary_path": str(resolved_binary),
+            "binary_name": resolved_binary.name,
+            "size_bytes": resolved_binary.stat().st_size,
+            "sha256": _sha256_file(resolved_binary),
+        },
+        "runtime_hints": {
+            "args": runtime_args,
+            "stdin_file_path": str(effective_stdin_file.resolve()) if effective_stdin_file else None,
+            "stdin_file_preview": _read_optional_sample(effective_stdin_file, max_bytes=256),
+            "stdin_file_size_bytes": (
+                int(effective_stdin_file.resolve().stat().st_size) if effective_stdin_file is not None else None
+            ),
+            "protocol_sample_path": str(protocol_sample.resolve()) if protocol_sample else None,
+        },
+        "architecture": {
+            "file_type": file_type,
+            "class": elf_header.get("Class"),
+            "machine": elf_header.get("Machine"),
+            "elf_type": elf_header.get("Type"),
+            "data_encoding": elf_header.get("Data"),
+            "entry_point": elf_header.get("Entry point address"),
+        },
+        "mitigations": mitigations,
+        "symbols": {
+            "imported_functions": imports[:80],
+            "imported_function_count": len(imports),
+            "exported_symbol_count": exported_symbol_count,
+        },
+        "strings": {
+            "highlights": strings_highlights,
+            "highlight_count": len(strings_highlights),
+            "truncated": bool(evidence_by_id.get("strings", {}).get("stdout", {}).get("truncated", False)),
+            "collected_line_count": int(evidence_by_id.get("strings", {}).get("stdout", {}).get("line_count_total", 0)),
+        },
+        "suspicious_indicators": suspicious_indicators,
+        "evidence": evidence,
+        # Compatibility keys retained for planner consumers that expect the previous shape.
         "root": str(resolved_root),
         "binary_path": str(resolved_binary),
         "binary_fingerprint": {
             "size_bytes": resolved_binary.stat().st_size,
+            "sha256": _sha256_file(resolved_binary),
         },
         "inputs": {
-            "stdin_sample_path": str(stdin_sample.resolve()) if stdin_sample else None,
+            "stdin_file_path": str(effective_stdin_file.resolve()) if effective_stdin_file else None,
+            "stdin_sample_path": str(effective_stdin_file.resolve()) if effective_stdin_file else None,
             "protocol_sample_path": str(protocol_sample.resolve()) if protocol_sample else None,
-            "stdin_sample_preview": _read_optional_sample(stdin_sample),
-            "protocol_sample_preview": _read_optional_sample(protocol_sample),
+            "args": runtime_args,
         },
-        "identify": {
-            "file": _summarize_command(file_result),
-        },
-        "inspect": {
-            "elf_header": _summarize_command(elf_header_result),
-            "symbols": _summarize_command(symbol_result),
-            "nm_index": _summarize_command(nm_result),
-        },
-        "triage": {
-            "risk_marker_count": len(risk_markers),
-            "risk_markers": risk_markers,
-            "strings": _summarize_command(string_result),
-        },
-        "command_logs": [
-            _command_log("identify-file", file_result),
-            _command_log("inspect-elf-header", elf_header_result),
-            _command_log("inspect-symbols", symbol_result),
-            _command_log("triage-strings", string_result),
-            _command_log("inspect-nm", nm_result),
-        ],
     }
 
 
+def render_binary_audit_markdown(artifact: dict[str, Any]) -> str:
+    lines = ["# Binary Audit", ""]
+    target = dict(artifact.get("target") or {})
+    lines.append(f"- Binary: `{target.get('binary_path')}`")
+    lines.append(f"- SHA256: `{target.get('sha256')}`")
+    lines.append(f"- Size: {target.get('size_bytes')} bytes")
+
+    arch = dict(artifact.get("architecture") or {})
+    lines.append(f"- File type: {arch.get('file_type')}")
+    lines.append(f"- Machine: {arch.get('machine')}")
+    lines.append(f"- Class: {arch.get('class')}")
+
+    mitigations = dict(artifact.get("mitigations") or {})
+    if mitigations:
+        lines.append(
+            "- Mitigations: "
+            + ", ".join(
+                f"{key}={value}"
+                for key, value in sorted(mitigations.items())
+                if key in {"relro", "canary", "nx", "pie", "fortify"}
+            )
+        )
+
+    symbols = dict(artifact.get("symbols") or {})
+    lines.append(f"- Imported functions: {symbols.get('imported_function_count', 0)}")
+    lines.append(f"- Exported symbols: {symbols.get('exported_symbol_count', 0)}")
+
+    lines.extend(["", "## Suspicious Indicators", ""])
+    indicators = list(artifact.get("suspicious_indicators") or [])
+    if not indicators:
+        lines.append("- none")
+    else:
+        for indicator in indicators[:20]:
+            lines.append(
+                f"- [{indicator.get('kind', 'unknown')}] {indicator.get('indicator')}"
+                + (f" :: {indicator.get('evidence')}" if indicator.get("evidence") else "")
+            )
+
+    lines.extend(["", "## Tool Evidence", ""])
+    for entry in artifact.get("evidence", []):
+        lines.append(
+            f"- {entry.get('id')} ({entry.get('tool')}): status={entry.get('status')} "
+            f"available={str(entry.get('available')).lower()} rc={entry.get('returncode')}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
-    root = str(analysis.get("root") or "")
-    binary_path = str(analysis.get("binary_path") or "")
+    root = str(analysis.get("root") or analysis.get("target", {}).get("root") or "")
+    binary_path = str(analysis.get("binary_path") or analysis.get("target", {}).get("binary_path") or "")
     inputs = dict(analysis.get("inputs") or {})
+    runtime_hints = dict(analysis.get("runtime_hints") or {})
+
+    stdin_file_path = (
+        runtime_hints.get("stdin_file_path")
+        or inputs.get("stdin_file_path")
+        or inputs.get("stdin_sample_path")
+    )
+    runtime_args = list(runtime_hints.get("args") or inputs.get("args") or [])
 
     verify_cli = [
         "python3",
@@ -108,12 +272,10 @@ def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
         "--binary",
         binary_path,
     ]
-    stdin_sample_path = inputs.get("stdin_sample_path")
-    protocol_sample_path = inputs.get("protocol_sample_path")
-    if stdin_sample_path:
-        verify_cli.extend(["--stdin-sample", str(stdin_sample_path)])
-    if protocol_sample_path:
-        verify_cli.extend(["--protocol-sample", str(protocol_sample_path)])
+    if stdin_file_path:
+        verify_cli.extend(["--stdin-file", str(stdin_file_path)])
+    if runtime_args:
+        verify_cli.extend(["--", *runtime_args])
 
     next_actions = [
         {
@@ -179,7 +341,7 @@ def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
         "stage_order": list(STAGE_ORDER),
         "source_analysis_schema": analysis.get("schema"),
         "binary_path": binary_path,
-        "binary_fingerprint": analysis.get("binary_fingerprint"),
+        "binary_fingerprint": analysis.get("binary_fingerprint") or analysis.get("target", {}),
         "readiness": {
             "runnable_actions": 1,
             "blocked_actions": 2,
@@ -214,14 +376,17 @@ def verify_binary_execution(
     root: Path,
     binary: Path,
     args: list[str] | None = None,
-    stdin_sample: Path | None = None,
+    stdin_file: Path | None = None,
     protocol_sample: Path | None = None,
     config: AgentConfig | None = None,
+    stdin_sample: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
     resolved_root = root.resolve()
     resolved_binary = binary.resolve()
     if not resolved_binary.exists() or not resolved_binary.is_file():
         raise ValueError(f"binary not found: {resolved_binary}")
+
+    effective_stdin_file = stdin_file or stdin_sample
 
     cfg = config or AgentConfig()
     policy = CommandPolicy(
@@ -230,7 +395,7 @@ def verify_binary_execution(
         timeout_seconds=cfg.timeout_seconds,
     )
 
-    input_text = _read_optional_sample(stdin_sample)
+    input_text = _read_optional_sample(effective_stdin_file)
     run_args = args or []
     safe_argv, safe_cwd = policy.validate([f"./{resolved_binary.name}", *run_args], cwd=resolved_binary.parent)
 
@@ -261,7 +426,7 @@ def verify_binary_execution(
         "root": str(resolved_root),
         "binary_path": str(resolved_binary),
         "argv": [str(resolved_binary), *run_args],
-        "stdin_sample_path": str(stdin_sample.resolve()) if stdin_sample else None,
+        "stdin_file_path": str(effective_stdin_file.resolve()) if effective_stdin_file else None,
         "protocol_sample_path": str(protocol_sample.resolve()) if protocol_sample else None,
         "returncode": returncode,
         "sanitizer_signal": sanitizer_signal,
@@ -271,22 +436,238 @@ def verify_binary_execution(
     return returncode, artifact
 
 
-def _summarize_command(result: CommandResult) -> dict[str, Any]:
+def _collect_tool_evidence(policy: CommandPolicy, spec: dict[str, Any], binary: Path) -> dict[str, Any]:
+    tool = str(spec["tool"])
+    argv = list(spec["build_argv"](binary))
+
+    if tool not in policy.allowlist:
+        return _unavailable_evidence(spec, argv, reason="blocked-by-policy")
+    if shutil.which(tool) is None:
+        return _unavailable_evidence(spec, argv, reason="tool-not-found")
+
+    try:
+        result = policy.run(argv)
+    except PolicyError as exc:
+        return _unavailable_evidence(spec, argv, reason=str(exc))
+    except OSError as exc:
+        return _unavailable_evidence(spec, argv, reason=f"os-error: {exc}")
+
+    stdout_capture = _truncate_capture(
+        result.stdout,
+        max_lines=int(spec.get("stdout_lines", 80)),
+        max_chars=int(spec.get("stdout_chars", 12000)),
+    )
+    stderr_capture = _truncate_capture(result.stderr, max_lines=80, max_chars=8000)
     return {
+        "id": spec["id"],
+        "tool": tool,
+        "command": argv,
+        "available": True,
+        "status": "ok" if result.returncode == 0 else "error",
         "returncode": result.returncode,
-        "stdout_head": _head_lines(result.stdout),
-        "stderr_head": _head_lines(result.stderr),
+        "error": None,
+        "stdout": stdout_capture,
+        "stderr": stderr_capture,
+        "truncation": {
+            "stdout_truncated": bool(stdout_capture["truncated"]),
+            "stderr_truncated": bool(stderr_capture["truncated"]),
+        },
     }
 
 
-def _command_log(name: str, result: CommandResult) -> dict[str, Any]:
+def _unavailable_evidence(spec: dict[str, Any], argv: list[str], *, reason: str) -> dict[str, Any]:
     return {
-        "name": name,
-        "argv": result.argv,
-        "returncode": result.returncode,
-        "stdout_lines": len(result.stdout.splitlines()),
-        "stderr_lines": len(result.stderr.splitlines()),
+        "id": spec["id"],
+        "tool": spec["tool"],
+        "command": argv,
+        "available": False,
+        "status": "unavailable",
+        "returncode": None,
+        "error": reason,
+        "stdout": _empty_capture(),
+        "stderr": _empty_capture(),
+        "truncation": {
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        },
     }
+
+
+def _empty_capture() -> dict[str, Any]:
+    return {
+        "lines": [],
+        "line_count_total": 0,
+        "line_count_kept": 0,
+        "char_count_total": 0,
+        "char_count_kept": 0,
+        "truncated": False,
+    }
+
+
+def _truncate_capture(text: str, *, max_lines: int, max_chars: int) -> dict[str, Any]:
+    lines = text.splitlines()
+    kept_lines: list[str] = []
+    kept_chars = 0
+    for line in lines:
+        if len(kept_lines) >= max_lines:
+            break
+        if kept_chars + len(line) > max_chars:
+            break
+        kept_lines.append(line)
+        kept_chars += len(line)
+
+    total_chars = sum(len(line) for line in lines)
+    truncated = len(kept_lines) < len(lines) or kept_chars < total_chars
+    return {
+        "lines": kept_lines,
+        "line_count_total": len(lines),
+        "line_count_kept": len(kept_lines),
+        "char_count_total": total_chars,
+        "char_count_kept": kept_chars,
+        "truncated": truncated,
+    }
+
+
+def _stdout_lines(entry: dict[str, Any] | None) -> list[str]:
+    if not entry:
+        return []
+    return list((entry.get("stdout") or {}).get("lines") or [])
+
+
+def _first_line(lines: list[str]) -> str | None:
+    if not lines:
+        return None
+    return lines[0]
+
+
+def _parse_elf_header(lines: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _parse_checksec_mitigations(entry: dict[str, Any] | None) -> dict[str, Any]:
+    result = {
+        "source": "checksec",
+        "available": False,
+        "relro": "unknown",
+        "canary": "unknown",
+        "nx": "unknown",
+        "pie": "unknown",
+        "fortify": "unknown",
+    }
+    if not entry or not entry.get("available"):
+        return result
+
+    result["available"] = True
+    text = "\n".join(_stdout_lines(entry)).lower()
+
+    if "full relro" in text:
+        result["relro"] = "full"
+    elif "partial relro" in text:
+        result["relro"] = "partial"
+    elif "no relro" in text:
+        result["relro"] = "none"
+
+    canary_field = _extract_field_value(text, "canary")
+    if "no canary found" in text or canary_field in {"no", "none"}:
+        result["canary"] = "none"
+    elif "canary found" in text or canary_field in {"yes", "present", "enabled"}:
+        result["canary"] = "present"
+
+    nx_field = _extract_field_value(text, "nx")
+    if "nx disabled" in text or nx_field in {"no", "disabled"}:
+        result["nx"] = "disabled"
+    elif "nx enabled" in text or nx_field in {"yes", "enabled"}:
+        result["nx"] = "enabled"
+
+    pie_field = _extract_field_value(text, "pie")
+    if "no pie" in text or pie_field in {"no", "disabled"}:
+        result["pie"] = "disabled"
+    elif "pie enabled" in text or pie_field in {"yes", "enabled"}:
+        result["pie"] = "enabled"
+
+    if "fortify" in text:
+        result["fortify"] = "present"
+
+    return result
+
+
+def _extract_field_value(text: str, field_name: str) -> str | None:
+    match = re.search(rf"\b{re.escape(field_name)}\s*:\s*([a-z0-9_-]+)", text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _extract_imported_functions(lines: list[str]) -> list[str]:
+    imports: set[str] = set()
+    for line in lines:
+        if " UND " not in line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        symbol = parts[-1].split("@", 1)[0]
+        if symbol:
+            imports.add(symbol)
+    return sorted(imports)
+
+
+def _count_exported_symbols(lines: list[str]) -> int:
+    count = 0
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        symbol_type = parts[-2]
+        symbol_name = parts[-1]
+        if symbol_type == "U" or not symbol_name:
+            continue
+        count += 1
+    return count
+
+
+def _extract_strings_highlights(lines: list[str]) -> list[dict[str, str]]:
+    highlights: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in lines:
+        lowered = line.lower()
+        for marker in _STRING_MARKERS:
+            if marker in lowered:
+                key = (marker, line.strip())
+                if key in seen:
+                    continue
+                seen.add(key)
+                highlights.append({"marker": marker, "value": line.strip()[:240]})
+    return highlights[:40]
+
+
+def _build_suspicious_indicators(imports: list[str], highlights: list[dict[str, str]]) -> list[dict[str, str]]:
+    indicators: set[tuple[str, str, str]] = set()
+
+    for symbol in imports:
+        if symbol in _SUSPICIOUS_IMPORTS:
+            indicators.add(("import", symbol, ""))
+
+    for item in highlights:
+        marker = str(item.get("marker") or "")
+        value = str(item.get("value") or "")
+        indicators.add(("string", marker, value))
+
+    ordered = sorted(indicators)
+    return [
+        {
+            "kind": kind,
+            "indicator": indicator,
+            "evidence": evidence,
+        }
+        for kind, indicator, evidence in ordered
+    ]
 
 
 def _head_lines(text: str, *, limit: int = 20) -> list[str]:
@@ -304,29 +685,15 @@ def _read_optional_sample(path: Path | None, *, max_bytes: int = 512) -> str | N
     return data.decode("utf-8", errors="replace")
 
 
-def _detect_risk_markers(strings_output: str) -> list[dict[str, str]]:
-    markers = [
-        "strcpy",
-        "strcat",
-        "gets",
-        "sprintf",
-        "system",
-        "popen",
-        "/bin/sh",
-        "execve",
-    ]
-    findings: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for line in strings_output.splitlines():
-        lowered = line.lower()
-        for marker in markers:
-            if marker in lowered:
-                key = (marker, line.strip())
-                if key in seen:
-                    continue
-                findings.append({"marker": marker, "evidence": line.strip()[:200]})
-                seen.add(key)
-    return findings[:40]
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(65536)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _has_sanitizer_signal(stderr: str) -> bool:

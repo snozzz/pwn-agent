@@ -9,6 +9,7 @@ from ...reporting import write_report
 from .workflow import (
     build_binary_plan,
     load_binary_analysis,
+    render_binary_audit_markdown,
     render_binary_plan_markdown,
     scan_binary,
     verify_binary_execution,
@@ -24,12 +25,16 @@ BINARY_COMMANDS = {
 
 
 def register_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    binary_scan = subparsers.add_parser("binary-scan", help="analyze a local binary and emit a binary-mode artifact")
+    binary_scan = subparsers.add_parser("binary-scan", help="collect bounded local evidence for a binary")
     binary_scan.add_argument("--root", type=Path, required=True, help="workspace root")
     binary_scan.add_argument("--binary", type=Path, required=True, help="path to local ELF/binary")
-    binary_scan.add_argument("--output", type=Path, required=True, help="output binary analysis json")
-    binary_scan.add_argument("--stdin-sample", type=Path, help="optional stdin sample file")
+    binary_scan.add_argument("--output", type=Path, required=True, help="output binary audit json")
+    binary_scan.add_argument("--report", type=Path, help="optional markdown audit report")
+    binary_scan.add_argument("--stdin-file", dest="stdin_file", type=Path, help="optional stdin file metadata hint")
+    binary_scan.add_argument("--stdin-sample", dest="stdin_file", type=Path, help=argparse.SUPPRESS)
     binary_scan.add_argument("--protocol-sample", type=Path, help="optional protocol/input sample file")
+    binary_scan.add_argument("--args", nargs="*", default=[], help="optional runtime argument hint list")
+    binary_scan.add_argument("--timeout", type=int, help="optional scan timeout override in seconds")
     binary_scan.add_argument("--config", type=Path, help="optional JSON config path")
 
     binary_plan = subparsers.add_parser("binary-plan", help="build a binary workflow plan from a binary analysis artifact")
@@ -51,7 +56,8 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     binary_verify = subparsers.add_parser("binary-verify", help="run bounded local binary verification")
     binary_verify.add_argument("--root", type=Path, required=True, help="workspace root")
     binary_verify.add_argument("--binary", type=Path, required=True, help="path to local binary")
-    binary_verify.add_argument("--stdin-sample", type=Path, help="optional stdin sample file")
+    binary_verify.add_argument("--stdin-file", dest="stdin_file", type=Path, help="optional stdin file")
+    binary_verify.add_argument("--stdin-sample", dest="stdin_file", type=Path, help=argparse.SUPPRESS)
     binary_verify.add_argument("--protocol-sample", type=Path, help="optional protocol/input sample file")
     binary_verify.add_argument("--output", type=Path, help="optional binary verify artifact json")
     binary_verify.add_argument("--config", type=Path, help="optional JSON config path")
@@ -67,11 +73,15 @@ def handle_command(args: argparse.Namespace) -> int | None:
         artifact = scan_binary(
             root=args.root,
             binary=args.binary,
-            stdin_sample=args.stdin_sample,
+            stdin_file=args.stdin_file,
+            args=args.args,
+            timeout_seconds=args.timeout,
             protocol_sample=args.protocol_sample,
             config=config,
         )
         write_binary_json(args.output, artifact)
+        if args.report:
+            write_report(args.report, render_binary_audit_markdown(artifact))
         print(f"binary scan complete; wrote {args.output}")
         return 0
 
@@ -106,7 +116,7 @@ def handle_command(args: argparse.Namespace) -> int | None:
             root=args.root,
             binary=args.binary,
             args=args.args,
-            stdin_sample=args.stdin_sample,
+            stdin_file=args.stdin_file,
             protocol_sample=args.protocol_sample,
             config=config,
         )

@@ -17,6 +17,7 @@ DEFAULT_ALLOWLIST = {
     "nm",
     "objdump",
     "readelf",
+    "checksec",
     "cmake",
     "make",
     "ninja",

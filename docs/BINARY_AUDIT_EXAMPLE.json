@@ -1,0 +1,107 @@
+{
+  "schema": "pwn-agent.binary-analysis.v1",
+  "schema_version": 1,
+  "artifact_type": "binary_audit",
+  "mode": "binary",
+  "target": {
+    "root": "/tmp/demo",
+    "binary_path": "/tmp/demo/app",
+    "binary_name": "app",
+    "size_bytes": 41256,
+    "sha256": "7b3d0f3c6b8fdbbbf8f6f5f5b9654eb3c2b44ecf5e6c8d5f98a6f3f8b2d9c2ef"
+  },
+  "runtime_hints": {
+    "args": [
+      "--input",
+      "sample.bin"
+    ],
+    "stdin_file_path": "/tmp/demo/stdin.txt",
+    "stdin_file_preview": "AAAA...",
+    "stdin_file_size_bytes": 128,
+    "protocol_sample_path": null
+  },
+  "architecture": {
+    "file_type": "ELF 64-bit LSB pie executable, x86-64",
+    "class": "ELF64",
+    "machine": "Advanced Micro Devices X86-64",
+    "elf_type": "DYN (Position-Independent Executable file)",
+    "data_encoding": "2's complement, little endian",
+    "entry_point": "0x1050"
+  },
+  "mitigations": {
+    "source": "checksec",
+    "available": true,
+    "relro": "full",
+    "canary": "present",
+    "nx": "enabled",
+    "pie": "enabled",
+    "fortify": "present"
+  },
+  "symbols": {
+    "imported_functions": [
+      "__libc_start_main",
+      "printf",
+      "strcpy"
+    ],
+    "imported_function_count": 3,
+    "exported_symbol_count": 14
+  },
+  "strings": {
+    "highlights": [
+      {
+        "marker": "strcpy",
+        "value": "strcpy"
+      },
+      {
+        "marker": "/bin/sh",
+        "value": "/bin/sh"
+      }
+    ],
+    "highlight_count": 2,
+    "truncated": false,
+    "collected_line_count": 87
+  },
+  "suspicious_indicators": [
+    {
+      "kind": "import",
+      "indicator": "strcpy",
+      "evidence": ""
+    },
+    {
+      "kind": "string",
+      "indicator": "/bin/sh",
+      "evidence": "/bin/sh"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "file",
+      "tool": "file",
+      "available": true,
+      "status": "ok",
+      "returncode": 0,
+      "stdout": {
+        "lines": [
+          "..."
+        ],
+        "line_count_total": 1,
+        "line_count_kept": 1,
+        "char_count_total": 72,
+        "char_count_kept": 72,
+        "truncated": false
+      },
+      "stderr": {
+        "lines": [],
+        "line_count_total": 0,
+        "line_count_kept": 0,
+        "char_count_total": 0,
+        "char_count_kept": 0,
+        "truncated": false
+      },
+      "truncation": {
+        "stdout_truncated": false,
+        "stderr_truncated": false
+      }
+    }
+  ]
+}

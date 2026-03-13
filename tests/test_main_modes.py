@@ -20,11 +20,21 @@ class MainModeTests(unittest.TestCase):
                 "/tmp/demo/app",
                 "--output",
                 "/tmp/demo/binary-analysis.json",
+                "--stdin-file",
+                "/tmp/demo/stdin.bin",
+                "--args",
+                "one",
+                "two",
+                "--timeout",
+                "15",
             ]
         )
 
         self.assertEqual(args.command, "binary-scan")
         self.assertEqual(args.binary, Path("/tmp/demo/app"))
+        self.assertEqual(args.stdin_file, Path("/tmp/demo/stdin.bin"))
+        self.assertEqual(args.args, ["one", "two"])
+        self.assertEqual(args.timeout, 15)
 
     def test_main_routes_audit_commands_to_audit_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
