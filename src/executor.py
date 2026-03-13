@@ -15,6 +15,7 @@ ALLOWED_MAIN_SUBCOMMANDS = {
     "rebuild-target",
     "rebuild-verify",
     "rebuild-plan",
+    "binary-verify",
 }
 
 

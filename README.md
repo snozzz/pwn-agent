@@ -22,6 +22,15 @@ The first MVP focuses on:
 4. evidence-based markdown reporting
 5. a safe command allowlist abstraction
 
+## Dual-mode architecture
+
+The scaffold now has two explicit modes:
+
+1. `audit` mode (`src/modes/audit/...`): source/build/sanitizer-oriented workflow.
+2. `binary` mode (`src/modes/binary/...`): local authorized binary triage, crash analysis, and patch-validation workflow.
+
+Both modes are registered through `src/main.py`, and each mode has isolated command registration/dispatch logic.
+
 ## Planned phases
 
 - Phase 1: repository skeleton and design docs
@@ -54,6 +63,10 @@ python3 -m src.main audit --root examples --report out/audit.md --config pwn-age
 python3 -m src.main rebuild-plan --root examples
 python3 -m src.main rebuild-target --root examples --index 1 --output-name vuln_demo_rebuilt_asan --config pwn-agent.json
 python3 -m src.main rebuild-verify --root examples --index 1 --output-name vuln_demo_pipeline_asan --config pwn-agent.json
+python3 -m src.main binary-scan --root examples --binary examples/vuln_demo_asan --output out/binary-analysis.json
+python3 -m src.main binary-plan --analysis-json out/binary-analysis.json --output out/binary-plan.json --report out/binary-plan.md
+python3 -m src.main binary-run --plan out/binary-plan.json --output out/binary-run.json --report out/binary-run.md --dry-run
+python3 -m src.main binary-verify --root examples --binary examples/vuln_demo_asan --output out/binary-verify.json
 ```
 
 ## Safety model
@@ -65,9 +78,14 @@ The command-execution layer is intentionally constrained:
 - fixed timeout for command execution
 - no shell passthrough by default
 
+Binary mode stays bounded to local tooling and bounded local binary execution; it does not provide unrestricted shell execution or unattended remote exploitation flows.
+
 ## Current status
 
 This MVP is intended for defensive security review on local codebases with constrained command execution.
+
+`audit` mode artifacts continue to use `audit.json` style workflow outputs.
+`binary` mode uses separate schemas (`pwn-agent.binary-analysis.v1`, `pwn-agent.binary-plan.v1`, `pwn-agent.binary-verify.v1`) so source-audit structures are not overloaded.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
