@@ -72,6 +72,7 @@ class ExecutionSummary:
     executed: int
     selected_action_ids: list[str]
     completed_action_ids: list[str]
+    previewed_action_ids: list[str]
     resumed_completed_action_ids: list[str]
     stale_completed_action_ids: list[str]
     new_action_ids: list[str]
@@ -102,6 +103,7 @@ class ExecutionSummary:
             "executed": self.executed,
             "selected_action_ids": self.selected_action_ids,
             "completed_action_ids": self.completed_action_ids,
+            "previewed_action_ids": self.previewed_action_ids,
             "resumed_completed_action_ids": self.resumed_completed_action_ids,
             "stale_completed_action_ids": self.stale_completed_action_ids,
             "new_action_ids": self.new_action_ids,
@@ -187,6 +189,7 @@ def execute_plan(
         completed_ids=resumed_completed_ids,
     )
     records: list[ExecutionRecord] = []
+    previewed_action_ids: list[str] = []
     transitions: list[ExecutionTransition] = []
     stopped_reason = "no-executable-actions"
     completed_ids: set[str] = set(resumed_completed_ids)
@@ -210,9 +213,9 @@ def execute_plan(
                     stderr="",
                 )
             )
-            _transition(state, transitions, action, "dry-run", reason="validated-without-execution")
+            _transition(state, transitions, action, "previewed", reason="validated-without-execution")
             stopped_reason = "dry-run"
-            completed_ids.add(action["id"])
+            previewed_action_ids.append(action["id"])
             continue
 
         _transition(state, transitions, action, "running", reason="command-started")
@@ -271,6 +274,7 @@ def execute_plan(
         executed=sum(1 for record in records if record.status in {"ok", "failed"}),
         selected_action_ids=[action["id"] for action in selected],
         completed_action_ids=[action["id"] for action in selected if action["id"] in completed_ids],
+        previewed_action_ids=previewed_action_ids,
         resumed_completed_action_ids=sorted(resumed_completed_ids),
         stale_completed_action_ids=reconciliation.stale_completed_action_ids,
         new_action_ids=reconciliation.new_action_ids,
@@ -328,6 +332,8 @@ def render_execution_markdown(summary: ExecutionSummary) -> str:
         lines.append(f"- Selected actions: {', '.join(summary.selected_action_ids)}")
     if summary.completed_action_ids:
         lines.append(f"- Completed actions: {', '.join(summary.completed_action_ids)}")
+    if summary.previewed_action_ids:
+        lines.append(f"- Previewed actions: {', '.join(summary.previewed_action_ids)}")
     if summary.resumed_completed_action_ids:
         lines.append(f"- Previously completed actions: {', '.join(summary.resumed_completed_action_ids)}")
     if summary.stale_completed_action_ids:
@@ -402,7 +408,10 @@ def _load_state(
         plan_path=payload.get("plan_path", str(plan_path)),
         plan_schema_version=payload.get("plan_schema_version"),
         plan_fingerprint=payload.get("plan_fingerprint"),
-        action_states=dict(payload.get("action_states", {})),
+        action_states={
+            action_id: _normalize_action_state(action_state)
+            for action_id, action_state in dict(payload.get("action_states", {})).items()
+        },
         action_signatures=dict(payload.get("action_signatures", {})),
         completed_action_ids=list(payload.get("completed_action_ids", [])),
         history=history,
@@ -526,7 +535,7 @@ def _refresh_passive_states(
         current = state.action_states.get(action_id)
         if action_id in deferred and current not in {"running", "failed", "completed"}:
             state.action_states[action_id] = "deferred"
-        elif action_id in runnable and current not in {"running", "failed", "completed", "selected", "dry-run"}:
+        elif action_id in runnable and current not in {"running", "failed", "completed", "selected", "previewed", "dry-run"}:
             state.action_states[action_id] = "queued"
 
 
@@ -561,6 +570,12 @@ def _count_states(action_states: dict[str, str]) -> dict[str, int]:
     for state in action_states.values():
         counts[state] = counts.get(state, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _normalize_action_state(action_state: str) -> str:
+    if action_state == "dry-run":
+        return "previewed"
+    return action_state
 
 
 def _filter_runnable_actions(

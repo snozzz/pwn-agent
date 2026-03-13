@@ -47,7 +47,7 @@ class ExecutorMarkdownTests(unittest.TestCase):
 
             self.assertIn("Runnable actions:", markdown)
             self.assertIn("Deferred actions:", markdown)
-            self.assertIn("Completed actions:", markdown)
+            self.assertIn("Previewed actions:", markdown)
             self.assertIn("Next actions:", markdown)
             self.assertIn("run-rebuild-verify", markdown)
             self.assertIn("rebuild-target-1", markdown)

@@ -6,14 +6,15 @@ The executor now produces a richer execution summary and can persist bounded run
 
 - actions actually executed
 - actions selected for execution
-- actions completed successfully or hypothetically completed in `--dry-run`
+- actions completed successfully
+- actions previewed in `--dry-run` (without marking them completed)
 - actions previously completed in an earlier turn when a state file is resumed
 - actions deferred because dependencies were not yet satisfied
 - runnable action inventory after filters are applied
 - remaining runnable actions after the current step
 - `next_action_ids` so a controller can continue without recomputing dependency ordering
 - status counts for downstream orchestration
-- per-action state counts (`queued`, `deferred`, `running`, `completed`, `failed`, `dry-run`, etc.)
+- per-action state counts (`queued`, `deferred`, `running`, `completed`, `failed`, `previewed`, etc.)
 - explicit transition entries showing how each selected action moved through the loop
 
 ## Resume support
