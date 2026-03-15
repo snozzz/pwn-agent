@@ -80,6 +80,7 @@ The command-execution layer is intentionally constrained:
 - explicit command policy registry (`src/command_registry.py`) with per-command argument rules
 - fixed timeout for command execution
 - per-command output truncation policy
+- internal `python3 -m src.main ...` leaf actions execute through that same policy layer
 - no shell passthrough by default
 
 Binary mode stays bounded to local tooling and bounded local binary execution; it does not provide unrestricted shell execution or unattended remote exploitation flows.

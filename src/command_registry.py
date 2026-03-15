@@ -191,7 +191,14 @@ COMMAND_POLICY_REGISTRY: dict[str, CommandRule] = {
         OutputTruncationPolicy(max_stdout_chars=24000, max_stderr_chars=12000),
         _validate_gdb,
     ),
-    "python3": CommandRule("internal-main", "python3", "workspace", None, OutputTruncationPolicy(), _validate_python_main),
+    "python3": CommandRule(
+        "internal-main",
+        "python3",
+        "workspace",
+        None,
+        OutputTruncationPolicy(max_stdout_chars=24000, max_stderr_chars=24000),
+        _validate_python_main,
+    ),
 }
 
 

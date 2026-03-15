@@ -4,10 +4,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import hashlib
 import json
-import subprocess
 from typing import Any
 
 from .command_registry import LEAF_MAIN_SUBCOMMANDS, validate_main_cli
+from .policy import CommandPolicy
 
 
 MODULE_ROOT = Path(__file__).resolve().parents[1]
@@ -268,6 +268,7 @@ def execute_plan(
     transitions: list[ExecutionTransition] = []
     stopped_reason = "no-executable-actions"
     completed_ids: set[str] = set(resumed_completed_ids)
+    policy = CommandPolicy(workflow_root or MODULE_ROOT, timeout_seconds=timeout_seconds)
 
     _refresh_passive_states(state, actions, runnable_ids=runnable_ids, deferred_ids=deferred_ids)
 
@@ -294,14 +295,7 @@ def execute_plan(
             continue
 
         _transition(state, transitions, action, "running", reason="command-started")
-        proc = subprocess.run(
-            argv,
-            cwd=MODULE_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        proc = policy.run_validated(argv, cwd=MODULE_ROOT)
         status = "ok" if proc.returncode == 0 else "failed"
         records.append(
             ExecutionRecord(

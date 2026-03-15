@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.executor import ExecutorError, execute_plan
 
@@ -113,6 +115,99 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(summary.action_states["run-rebuild-plan"], "completed")
             self.assertEqual(summary.transition_count, 3)
             self.assertIn("targets=1", summary.records[0].stdout)
+
+    def test_execute_plan_internal_main_uses_policy_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "next_actions": [
+                            {
+                                "id": "run-rebuild-plan",
+                                "kind": "list_rebuild_targets",
+                                "phase": "execution",
+                                "title": "Inspect rebuild options",
+                                "status": "ready",
+                                "priority": 65,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            timeout_exc = subprocess.TimeoutExpired(
+                cmd=["python3", "-m", "src.main", "rebuild-plan", "--root", str(root)],
+                timeout=3,
+                output="partial stdout",
+                stderr="partial stderr",
+            )
+            with patch("src.policy.subprocess.run", side_effect=timeout_exc):
+                summary = execute_plan(plan_path, timeout_seconds=3)
+
+            self.assertEqual(summary.executed, 1)
+            self.assertEqual(summary.stopped_reason, "command-failed")
+            self.assertEqual(summary.records[0].returncode, 124)
+            self.assertEqual(summary.records[0].status, "failed")
+            self.assertIn("partial stdout", summary.records[0].stdout)
+            self.assertIn("[policy-timeout] command exceeded 3s", summary.records[0].stderr)
+
+    def test_execute_plan_internal_main_truncates_output_consistently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "next_actions": [
+                            {
+                                "id": "run-rebuild-plan",
+                                "kind": "list_rebuild_targets",
+                                "phase": "execution",
+                                "title": "Inspect rebuild options",
+                                "status": "ready",
+                                "priority": 65,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "src.policy.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["python3", "-m", "src.main", "rebuild-plan", "--root", str(root)],
+                    returncode=0,
+                    stdout="A" * 25050,
+                    stderr="B" * 25050,
+                ),
+            ):
+                summary = execute_plan(plan_path, timeout_seconds=30)
+
+            self.assertEqual(summary.records[0].status, "ok")
+            self.assertTrue(summary.records[0].stdout.endswith("\n[policy-truncated]\n"))
+            self.assertTrue(summary.records[0].stderr.endswith("\n[policy-truncated]\n"))
+            self.assertLess(len(summary.records[0].stdout), 24100)
+            self.assertLess(len(summary.records[0].stderr), 24100)
 
     def test_execute_plan_respects_phase_filter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

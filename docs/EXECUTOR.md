@@ -17,6 +17,7 @@ The executor now produces a richer execution summary and can persist bounded run
 - per-action state counts (`queued`, `deferred`, `running`, `completed`, `failed`, `previewed`, etc.)
 - explicit transition entries showing how each selected action moved through the loop
 - shared command-policy validation for internal `python3 -m src.main ...` actions
+- shared command-policy execution for internal `python3 -m src.main ...` actions
 - root consistency checks so action `--root` must match the plan/workflow root
 - leaf-action enforcement so planner/control-plane commands cannot recursively execute through plan `suggested_cli`
 
@@ -66,3 +67,21 @@ Control-plane commands are not executor-eligible, even though they are valid CLI
 - `agent-loop`
 
 This prevents recursive orchestration and malformed self-invocation through plan actions.
+
+## Unified Execution Model
+
+Internal `python3 -m src.main ...` leaf actions now go through the same `CommandPolicy` execution path as other bounded commands.
+
+- `suggested_cli` is still validated first for allowed leaf subcommands, `--root` binding, and workspace-bound path options.
+- after validation, execution goes through `CommandPolicy.run_validated(...)` instead of a raw `subprocess.run(...)` call
+- output summaries therefore use the same timeout and truncation behavior as other registry-backed commands
+
+## Timeout And Truncation
+
+Timeout precedence is explicit:
+
+- if a command rule defines `timeout_seconds`, that rule wins
+- otherwise the executor's per-run timeout is used
+
+For internal `python3` actions, the registry rule currently leaves timeout unset, so executor `--timeout` remains the effective limit.
+Stdout and stderr truncation come from the registry rule for `python3`, which means internal action summaries are now clipped with the same `[policy-truncated]` marker style as other bounded commands.
