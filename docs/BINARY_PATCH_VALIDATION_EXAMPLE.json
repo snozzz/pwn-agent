@@ -1,0 +1,95 @@
+{
+  "schema": "pwn-agent.binary-patch-validation.v1",
+  "schema_version": 1,
+  "artifact_type": "binary_patch_validation",
+  "mode": "binary",
+  "target": {
+    "root": "/workspace/demo",
+    "binary_path": "/workspace/demo/demo_patched",
+    "original_binary_path": "/workspace/demo/demo"
+  },
+  "patch_metadata": {
+    "patch_id": "guard-copy",
+    "summary": "Replace unbounded copy with a bounded formatter",
+    "source_schema": "pwn-agent.patch-script.v1",
+    "patch_input_path": "/workspace/demo/patches/guard-copy.json"
+  },
+  "apply_result": {
+    "edits_applied": [
+      {
+        "op": "replace_text",
+        "path": "/workspace/demo/src/demo.c",
+        "status": "applied",
+        "replacements": 1
+      }
+    ],
+    "build": {
+      "attempted": true,
+      "tool": "rebuild-target",
+      "status": "ok",
+      "returncode": 0,
+      "command": [
+        "cc",
+        "src/demo.c",
+        "-o",
+        "demo_patched"
+      ],
+      "output_binary": "/workspace/demo/demo_patched",
+      "stdout_head": [
+        "rebuilt"
+      ],
+      "stderr_head": []
+    },
+    "patched_binary_path": "/workspace/demo/demo_patched"
+  },
+  "validation_result": {
+    "overall_status": "passed",
+    "launch_check": {
+      "attempted": true,
+      "passed": true,
+      "reason": "passed"
+    },
+    "baseline_check": {
+      "attempted": true,
+      "passed": true,
+      "reason": "passed"
+    },
+    "regression_check": {
+      "attempted": true,
+      "passed": true,
+      "reason": "clean-exit"
+    }
+  },
+  "regression_notes": [
+    "Prior regression input no longer reproduces suspicious behavior."
+  ],
+  "remaining_risk_summary": {
+    "level": "low",
+    "summary": "patched build passed the bounded launch, baseline, and regression checks",
+    "notes": [
+      "Prior regression input no longer reproduces suspicious behavior."
+    ]
+  },
+  "evidence": [
+    {
+      "id": "patch-application",
+      "tool": "structured-patch",
+      "status": "ok"
+    },
+    {
+      "id": "build",
+      "tool": "rebuild-target",
+      "status": "ok"
+    },
+    {
+      "id": "baseline-validation",
+      "tool": "binary-verify",
+      "status": "ok"
+    },
+    {
+      "id": "regression-validation",
+      "tool": "crash-triage",
+      "status": "ok"
+    }
+  ]
+}

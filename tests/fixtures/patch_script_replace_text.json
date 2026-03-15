@@ -1,0 +1,36 @@
+{
+  "schema": "pwn-agent.patch-script.v1",
+  "schema_version": 1,
+  "patch_metadata": {
+    "patch_id": "guard-copy",
+    "summary": "Replace unbounded copy with a bounded formatter",
+    "source": "fixture"
+  },
+  "edits": [
+    {
+      "op": "replace_text",
+      "path": "src/demo.c",
+      "old": "strcpy(buf, input);",
+      "new": "snprintf(buf, sizeof(buf), \"%s\", input);"
+    }
+  ],
+  "build": {
+    "kind": "rebuild-target",
+    "target_index": 1,
+    "output_name": "demo_patched"
+  },
+  "validation": {
+    "baseline": {
+      "args": [
+        "baseline"
+      ],
+      "expected_returncode": 0
+    },
+    "regression": {
+      "args": [
+        "regress"
+      ],
+      "stdin_text": "AAAA"
+    }
+  }
+}

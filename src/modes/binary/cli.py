@@ -16,6 +16,7 @@ from .workflow import (
     verify_binary_execution,
     write_binary_json,
 )
+from .patching import load_patch_input, patch_validate, render_patch_validation_markdown
 
 BINARY_COMMANDS = {
     "binary-scan",
@@ -23,6 +24,7 @@ BINARY_COMMANDS = {
     "binary-run",
     "binary-verify",
     "binary-validate",
+    "patch-validate",
     "crash-triage",
     "binary-triage",
 }
@@ -76,6 +78,21 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     binary_validate.add_argument("--output", type=Path, help="optional binary verify artifact json")
     binary_validate.add_argument("--config", type=Path, help="optional JSON config path")
     binary_validate.add_argument("args", nargs="*", help="arguments passed to the binary")
+
+    patch_validate_parser = subparsers.add_parser("patch-validate", help="apply a bounded patch artifact/script and run validation")
+    patch_validate_parser.add_argument("--root", type=Path, required=True, help="workspace root")
+    patch_validate_input = patch_validate_parser.add_mutually_exclusive_group(required=True)
+    patch_validate_input.add_argument("--patch-json", type=Path, help="candidate patch artifact json")
+    patch_validate_input.add_argument("--patch-script", type=Path, help="structured patch script json")
+    patch_validate_parser.add_argument("--analysis-json", type=Path, help="optional binary analysis json")
+    patch_validate_parser.add_argument("--crash-json", type=Path, help="optional crash triage json")
+    patch_validate_parser.add_argument("--binary", type=Path, help="optional existing binary path")
+    patch_validate_parser.add_argument("--target-index", type=int, default=1, help="compile database rebuild target index")
+    patch_validate_parser.add_argument("--output-name", default="patched-target", help="rebuilt output binary name")
+    patch_validate_parser.add_argument("--output", type=Path, required=True, help="output patch validation json")
+    patch_validate_parser.add_argument("--report", type=Path, help="optional markdown patch validation report")
+    patch_validate_parser.add_argument("--timeout", type=int, help="optional timeout override in seconds")
+    patch_validate_parser.add_argument("--config", type=Path, help="optional JSON config path")
 
     crash_triage = subparsers.add_parser("crash-triage", help="run bounded crash triage for a local binary")
     crash_triage.add_argument("--root", type=Path, required=True, help="workspace root")
@@ -189,5 +206,29 @@ def handle_command(args: argparse.Namespace) -> int | None:
         for line in artifact.get("stderr_head", []):
             print(line)
         return returncode
+
+    if args.command == "patch-validate":
+        config = AgentConfig.load(args.config)
+        patch_path = args.patch_json if args.patch_json is not None else args.patch_script
+        patch_payload = load_patch_input(patch_path)
+        analysis = load_binary_artifact(args.analysis_json) if args.analysis_json is not None else None
+        crash = load_binary_artifact(args.crash_json) if args.crash_json is not None else None
+        artifact = patch_validate(
+            root=args.root,
+            patch_payload=patch_payload,
+            patch_source_path=patch_path,
+            analysis=analysis,
+            crash=crash,
+            binary=args.binary,
+            target_index=args.target_index,
+            output_name=args.output_name,
+            timeout_seconds=args.timeout,
+            config=config,
+        )
+        write_binary_json(args.output, artifact)
+        if args.report:
+            write_report(args.report, render_patch_validation_markdown(artifact))
+        print(f"patch validation complete; wrote {args.output}")
+        return 0
 
     return None

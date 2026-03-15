@@ -19,11 +19,13 @@ Binary mode emits separate artifacts from source-audit outputs:
 - `pwn-agent.binary-crash-triage.v1` from `crash-triage` / `binary-triage`
 - `pwn-agent.binary-plan.v2` from `binary-plan`
 - `pwn-agent.binary-verify.v1` from `binary-verify`
+- `pwn-agent.binary-patch-validation.v1` from `patch-validate`
 - `binary-run` uses the bounded plan executor and writes an execution summary for plan progress
 
 These schemas are intentionally separate from `audit.json` to avoid conflating source-level and binary-level evidence.
 See [BINARY_AUDIT_EXAMPLE.json](/home/snoz/pwn-agent/docs/BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
 See [BINARY_PLANNER.md](/home/snoz/pwn-agent/docs/BINARY_PLANNER.md) for the planner schema and migration notes.
+See [BINARY_PATCH_WORKFLOW.md](/home/snoz/pwn-agent/docs/BINARY_PATCH_WORKFLOW.md) for bounded patch validation.
 
 ## Supported stages
 
@@ -44,6 +46,7 @@ Current command mapping:
 - `binary-plan` emits stage-aware next actions
 - `binary-run` executes bounded ready actions while preferring earlier investigation stages before later patch/summary stages
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
+- `patch-validate` applies a structured patch artifact/script, optionally rebuilds a target, and validates launch/baseline/regression behavior
 
 `binary-scan` evidence collection is bounded to local tools:
 
@@ -76,6 +79,14 @@ Binary plan artifacts normalize into these top-level sections:
 - `readiness`: counts of runnable, blocked, and context actions
 - `next_actions`: staged actions with rationale, dependency edges, expected artifacts, and bounded `suggested_cli`
 
+Patch validation artifacts normalize into these top-level sections:
+
+- `patch_metadata`: candidate patch identity and source metadata
+- `apply_result`: bounded edit results plus rebuild/output-binary metadata
+- `validation_result`: launch, baseline, and regression checks
+- `regression_notes`: human-readable defensive notes about what still fails or is missing
+- `remaining_risk_summary`: low/medium/high residual risk assessment for the next planner/model loop
+
 ## Safety and bounded execution
 
 - workspace-bounded command policy
@@ -85,6 +96,7 @@ Binary plan artifacts normalize into these top-level sections:
 - per-command output truncation policy
 - local execution only
 - no shell passthrough
+- no arbitrary patch code execution
 
 ## Explicit non-goals
 

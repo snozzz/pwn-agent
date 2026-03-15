@@ -80,6 +80,32 @@ class MainModeTests(unittest.TestCase):
         self.assertIsNone(args.analysis_json)
         self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
 
+    def test_build_parser_supports_patch_validate(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "patch-validate",
+                "--root",
+                "/tmp/demo",
+                "--patch-script",
+                "/tmp/demo/patch.json",
+                "--analysis-json",
+                "/tmp/demo/analysis.json",
+                "--crash-json",
+                "/tmp/demo/crash.json",
+                "--output",
+                "/tmp/demo/patch-validation.json",
+                "--output-name",
+                "demo_patched",
+            ]
+        )
+
+        self.assertEqual(args.command, "patch-validate")
+        self.assertEqual(args.patch_script, Path("/tmp/demo/patch.json"))
+        self.assertEqual(args.analysis_json, Path("/tmp/demo/analysis.json"))
+        self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
+        self.assertEqual(args.output_name, "demo_patched")
+
     def test_main_routes_audit_commands_to_audit_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

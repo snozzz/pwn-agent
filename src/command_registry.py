@@ -34,6 +34,7 @@ ALLOWED_MAIN_SUBCOMMANDS = {
     "binary-run",
     "crash-triage",
     "binary-validate",
+    "patch-validate",
 }
 
 
@@ -246,12 +247,15 @@ def _validate_path_options(args: list[str], root: Path) -> None:
         "--state",
         "--audit-json",
         "--analysis-json",
+        "--crash-json",
         "--stdin-file",
         "--stdin-sample",
         "--protocol-sample",
         "--report",
         "--trace-json",
         "--config",
+        "--patch-json",
+        "--patch-script",
     }
 
     index = 0
