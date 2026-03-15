@@ -247,6 +247,7 @@ def _validate_path_options(args: list[str], root: Path) -> None:
         "--state",
         "--audit-json",
         "--analysis-json",
+        "--patch-validation-json",
         "--crash-json",
         "--stdin-file",
         "--stdin-sample",

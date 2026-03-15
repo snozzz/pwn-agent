@@ -69,6 +69,7 @@ python3 -m src.main binary-plan --analysis-json out/binary-analysis.json --crash
 python3 -m src.main binary-run --plan out/binary-plan.json --output out/binary-run.json --report out/binary-run.md --dry-run
 python3 -m src.main binary-verify --root examples --binary examples/vuln_demo_asan --output out/binary-verify.json
 python3 -m src.main patch-validate --root examples --patch-script tests/fixtures/patch_script_replace_text.json --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --output out/patch-validation.json --report out/patch-validation.md
+python3 -m src.main agent-loop --root examples --plan out/binary-plan.json --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --model-response-jsonl out/model-choices.jsonl --output out/trajectory.json --state out/loop-state.json --executor-state out/executor-state.json --max-steps 2 --dry-run
 ```
 
 ## Safety model
@@ -93,6 +94,7 @@ The binary analysis artifact is a bounded local evidence bundle (target metadata
 Crash triage now emits a separate bounded artifact with execution outcome, crash summary, optional batch debugger summary, and normalized evidence records suitable for later planner/model use.
 Binary planning is now stage-aware rather than only phase-aware, with explicit `identify -> inspect -> reproduce -> triage -> patch -> validate -> summarize` ordering and dependency-bearing next actions derived from binary evidence.
 Patch validation now accepts structured patch artifacts/scripts, reuses the bounded rebuild and binary execution primitives, and emits explicit launch/baseline/regression results plus residual-risk notes for the next defensive loop.
+The bounded `agent-loop` layer now lets a model choose only from dependency-resolved plan actions using structured JSON; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later fine-tuning.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,

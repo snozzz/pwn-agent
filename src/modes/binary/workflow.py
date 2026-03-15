@@ -16,6 +16,7 @@ from ...policy import CommandPolicy, CommandResult, PolicyError
 ANALYSIS_SCHEMA = "pwn-agent.binary-analysis.v1"
 TRIAGE_SCHEMA = "pwn-agent.binary-crash-triage.v1"
 PLAN_SCHEMA = "pwn-agent.binary-plan.v2"
+PATCH_VALIDATION_SCHEMA = "pwn-agent.binary-patch-validation.v1"
 VERIFY_SCHEMA = "pwn-agent.binary-verify.v1"
 STAGE_ORDER = ["identify", "inspect", "reproduce", "triage", "patch", "validate", "summarize"]
 
@@ -109,7 +110,7 @@ def load_binary_analysis(path: Path) -> dict[str, Any]:
 
 def load_binary_artifact(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema") not in {ANALYSIS_SCHEMA, TRIAGE_SCHEMA, VERIFY_SCHEMA}:
+    if payload.get("schema") not in {ANALYSIS_SCHEMA, TRIAGE_SCHEMA, VERIFY_SCHEMA, PATCH_VALIDATION_SCHEMA}:
         raise ValueError(f"unsupported binary artifact schema: {payload.get('schema')}")
     return payload
 
@@ -291,18 +292,19 @@ def build_binary_plan(
     analysis: dict[str, Any] | None = None,
     *,
     crash: dict[str, Any] | None = None,
+    validation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if analysis is None and crash is None:
+    if analysis is None and crash is None and validation is None:
         raise ValueError("binary plan requires at least one artifact")
 
-    root = _resolve_binary_root(analysis, crash)
-    binary_path = _resolve_binary_path(analysis, crash)
+    root = _resolve_binary_root(analysis, crash, validation)
+    binary_path = _resolve_binary_path(analysis, crash, validation)
     stdin_file_path, runtime_args = _extract_runtime_hints(analysis, crash)
-    patch_candidate = _extract_patch_candidate(analysis, crash)
+    patch_candidate = _extract_patch_candidate(analysis, crash, validation)
     analysis_has_mitigations = _analysis_has_mitigations(analysis)
     crash_suspicious = bool(crash and dict(crash.get("crash_summary") or {}).get("suspicious"))
     debugger_collected = bool(crash and dict(crash.get("debugger_summary") or {}).get("collected"))
-    validation_present = bool(_extract_validation_result(analysis, crash))
+    validation_present = bool(_extract_validation_result(analysis, crash, validation))
 
     actions: list[dict[str, Any]] = []
     if not analysis_has_mitigations:
@@ -444,9 +446,10 @@ def build_binary_plan(
         "source_artifacts": {
             "analysis_schema": (analysis.get("schema") if analysis is not None else None),
             "crash_schema": (crash.get("schema") if crash is not None else None),
+            "validation_schema": (validation.get("schema") if validation is not None else None),
         },
         "binary_path": binary_path,
-        "binary_fingerprint": (analysis.get("binary_fingerprint") if analysis is not None else None) or (analysis.get("target") if analysis is not None else None) or (crash.get("target") if crash is not None else None),
+        "binary_fingerprint": (analysis.get("binary_fingerprint") if analysis is not None else None) or (analysis.get("target") if analysis is not None else None) or (crash.get("target") if crash is not None else None) or (validation.get("target") if validation is not None else None),
         "readiness": readiness,
         "next_actions": ordered_actions,
     }
@@ -480,7 +483,11 @@ def _binary_plan_action(
     }
 
 
-def _resolve_binary_root(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> str:
+def _resolve_binary_root(
+    analysis: dict[str, Any] | None,
+    crash: dict[str, Any] | None,
+    validation: dict[str, Any] | None,
+) -> str:
     candidates = [
         str(item)
         for item in [
@@ -488,6 +495,8 @@ def _resolve_binary_root(analysis: dict[str, Any] | None, crash: dict[str, Any] 
             (analysis or {}).get("target", {}).get("root"),
             (crash or {}).get("root"),
             (crash or {}).get("target", {}).get("root"),
+            (validation or {}).get("root"),
+            (validation or {}).get("target", {}).get("root"),
         ]
         if item
     ]
@@ -499,7 +508,11 @@ def _resolve_binary_root(analysis: dict[str, Any] | None, crash: dict[str, Any] 
     return unique[0]
 
 
-def _resolve_binary_path(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> str:
+def _resolve_binary_path(
+    analysis: dict[str, Any] | None,
+    crash: dict[str, Any] | None,
+    validation: dict[str, Any] | None,
+) -> str:
     candidates = [
         str(item)
         for item in [
@@ -507,6 +520,8 @@ def _resolve_binary_path(analysis: dict[str, Any] | None, crash: dict[str, Any] 
             (analysis or {}).get("target", {}).get("binary_path"),
             (crash or {}).get("binary_path"),
             (crash or {}).get("target", {}).get("binary_path"),
+            (validation or {}).get("binary_path"),
+            (validation or {}).get("target", {}).get("binary_path"),
         ]
         if item
     ]
@@ -534,14 +549,22 @@ def _extract_runtime_hints(analysis: dict[str, Any] | None, crash: dict[str, Any
     return (str(Path(stdin_file_path).resolve()) if stdin_file_path else None), runtime_args
 
 
-def _extract_patch_candidate(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> dict[str, Any] | None:
-    candidate = (crash or {}).get("patch_candidate") or (analysis or {}).get("patch_candidate")
+def _extract_patch_candidate(
+    analysis: dict[str, Any] | None,
+    crash: dict[str, Any] | None,
+    validation: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    candidate = (crash or {}).get("patch_candidate") or (analysis or {}).get("patch_candidate") or (validation or {}).get("patch_metadata")
     return dict(candidate) if isinstance(candidate, dict) else None
 
 
-def _extract_validation_result(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> dict[str, Any] | None:
-    validation = (crash or {}).get("validation_result") or (analysis or {}).get("validation_result")
-    return dict(validation) if isinstance(validation, dict) else None
+def _extract_validation_result(
+    analysis: dict[str, Any] | None,
+    crash: dict[str, Any] | None,
+    validation: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    payload = (validation or {}).get("validation_result") or (crash or {}).get("validation_result") or (analysis or {}).get("validation_result")
+    return dict(payload) if isinstance(payload, dict) else None
 
 
 def _analysis_has_mitigations(analysis: dict[str, Any] | None) -> bool:

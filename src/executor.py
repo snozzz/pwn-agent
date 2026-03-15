@@ -123,6 +123,34 @@ class ExecutionSummary:
         }
 
 
+@dataclass
+class PlanInspection:
+    plan_path: str
+    plan_schema_version: int | None
+    plan_fingerprint: str | None
+    runnable_action_ids: list[str]
+    deferred_action_ids: list[str]
+    next_action_ids: list[str]
+    resumed_completed_action_ids: list[str]
+    action_states: dict[str, str]
+    candidate_actions: list[dict[str, Any]]
+    resumed_from_state: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan_path": self.plan_path,
+            "plan_schema_version": self.plan_schema_version,
+            "plan_fingerprint": self.plan_fingerprint,
+            "runnable_action_ids": self.runnable_action_ids,
+            "deferred_action_ids": self.deferred_action_ids,
+            "next_action_ids": self.next_action_ids,
+            "resumed_completed_action_ids": self.resumed_completed_action_ids,
+            "action_states": self.action_states,
+            "candidate_actions": self.candidate_actions,
+            "resumed_from_state": self.resumed_from_state,
+        }
+
+
 class ExecutorError(RuntimeError):
     pass
 
@@ -137,6 +165,57 @@ class ReconciliationResult:
     stale_completed_action_ids: list[str]
     new_action_ids: list[str]
     changed_action_ids: list[str]
+
+
+def inspect_plan(
+    plan_path: Path,
+    *,
+    action_id: str | None = None,
+    phase: str | None = None,
+    state_path: Path | None = None,
+) -> PlanInspection:
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    actions = list(plan.get("next_actions", []))
+    plan_schema_version = _parse_plan_schema_version(plan)
+    plan_fingerprint = plan.get("plan_fingerprint")
+    state, resumed_from_state = _load_state(
+        state_path,
+        plan_path=plan_path,
+        actions=actions,
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
+    )
+    reconciliation = _reconcile_state_with_plan(
+        state,
+        plan_path=plan_path,
+        actions=actions,
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
+    )
+    completed_ids = set(reconciliation.carried_completed_action_ids)
+    filtered_actions = _filter_runnable_actions(
+        actions,
+        action_id=action_id,
+        phase=phase,
+        completed_ids=completed_ids,
+    )
+    candidate_actions, runnable_ids, deferred_ids = _select_actions(
+        filtered_actions,
+        max_actions=len(filtered_actions) if filtered_actions else 1,
+        completed_ids=completed_ids,
+    )
+    return PlanInspection(
+        plan_path=str(plan_path),
+        plan_schema_version=plan_schema_version,
+        plan_fingerprint=plan_fingerprint,
+        runnable_action_ids=runnable_ids,
+        deferred_action_ids=deferred_ids,
+        next_action_ids=[action.get("id") for action in candidate_actions if action.get("id")],
+        resumed_completed_action_ids=sorted(completed_ids),
+        action_states=dict(sorted(state.action_states.items())),
+        candidate_actions=candidate_actions,
+        resumed_from_state=resumed_from_state,
+    )
 
 
 def execute_plan(

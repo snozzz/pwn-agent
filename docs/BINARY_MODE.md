@@ -26,6 +26,7 @@ These schemas are intentionally separate from `audit.json` to avoid conflating s
 See [BINARY_AUDIT_EXAMPLE.json](/home/snoz/pwn-agent/docs/BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
 See [BINARY_PLANNER.md](/home/snoz/pwn-agent/docs/BINARY_PLANNER.md) for the planner schema and migration notes.
 See [BINARY_PATCH_WORKFLOW.md](/home/snoz/pwn-agent/docs/BINARY_PATCH_WORKFLOW.md) for bounded patch validation.
+See [AGENT_LOOP.md](/home/snoz/pwn-agent/docs/AGENT_LOOP.md) for the bounded model-driven loop.
 
 ## Supported stages
 
@@ -47,6 +48,7 @@ Current command mapping:
 - `binary-run` executes bounded ready actions while preferring earlier investigation stages before later patch/summary stages
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
 - `patch-validate` applies a structured patch artifact/script, optionally rebuilds a target, and validates launch/baseline/regression behavior
+- `agent-loop` consumes structured model choices over bounded plan actions and logs the resulting local trajectory
 
 `binary-scan` evidence collection is bounded to local tools:
 
@@ -97,6 +99,7 @@ Patch validation artifacts normalize into these top-level sections:
 - local execution only
 - no shell passthrough
 - no arbitrary patch code execution
+- no model-generated shell commands
 
 ## Explicit non-goals
 

@@ -1,0 +1,102 @@
+{
+  "schema": "pwn-agent.agent-loop.v1",
+  "schema_version": 1,
+  "mode": "binary",
+  "root": "/workspace/demo",
+  "plan_path": "/workspace/demo/out/binary-plan.json",
+  "artifact_paths": {
+    "analysis_json": "/workspace/demo/out/binary-analysis.json",
+    "crash_json": "/workspace/demo/out/crash-triage.json",
+    "patch_validation_json": null,
+    "verify_json": null
+  },
+  "step_count": 1,
+  "failure_count": 0,
+  "status": "step-budget-exhausted",
+  "iterations": [
+    {
+      "iteration": 1,
+      "artifact_snapshot": {
+        "analysis_json": {
+          "path": "/workspace/demo/out/binary-analysis.json",
+          "exists": true,
+          "artifact": {
+            "schema": "pwn-agent.binary-analysis.v1"
+          }
+        },
+        "crash_json": {
+          "path": "/workspace/demo/out/crash-triage.json",
+          "exists": true,
+          "artifact": {
+            "schema": "pwn-agent.binary-crash-triage.v1"
+          }
+        },
+        "patch_validation_json": null,
+        "verify_json": null
+      },
+      "plan_snapshot": {
+        "plan_path": "/workspace/demo/out/binary-plan.json",
+        "plan_schema_version": 2,
+        "plan_fingerprint": "1b7e6d3f4c5a9e20",
+        "candidate_actions": [
+          {
+            "id": "collect-debugger-context",
+            "stage": "triage",
+            "kind": "crash_triage_gdb",
+            "status": "ready"
+          }
+        ],
+        "runnable_action_ids": [
+          "collect-debugger-context"
+        ],
+        "deferred_action_ids": [],
+        "resumed_completed_action_ids": []
+      },
+      "model_choice": {
+        "schema": "pwn-agent.model-choice.v1",
+        "raw": {
+          "chosen_action_id": "collect-debugger-context",
+          "rationale": "The crash is suspicious and still lacks debugger context.",
+          "confidence": 0.88,
+          "summary_update": "Debugger context should be collected before patch validation."
+        },
+        "accepted": true,
+        "error": null,
+        "normalized": {
+          "chosen_action_id": "collect-debugger-context",
+          "rationale": "The crash is suspicious and still lacks debugger context.",
+          "confidence": 0.88,
+          "summary_update": "Debugger context should be collected before patch validation."
+        }
+      },
+      "execution_result": {
+        "selected_action_ids": [
+          "collect-debugger-context"
+        ],
+        "completed_action_ids": [
+          "collect-debugger-context"
+        ],
+        "stopped_reason": "completed"
+      },
+      "replanned": {
+        "plan_path": "/workspace/demo/out/binary-plan.json",
+        "plan_fingerprint": "6ffb40c9a9ebdbf3",
+        "next_action_ids": [
+          "draft-patch-hypothesis",
+          "summarize-local-findings"
+        ]
+      },
+      "status": "completed"
+    }
+  ],
+  "final_summary": {
+    "summary_text": "Debugger context should be collected before patch validation.",
+    "summary_updates": [
+      "Debugger context should be collected before patch validation."
+    ],
+    "remaining_candidate_action_ids": [
+      "collect-debugger-context"
+    ],
+    "last_plan_fingerprint": "6ffb40c9a9ebdbf3"
+  }
+}

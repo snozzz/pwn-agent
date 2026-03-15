@@ -106,6 +106,40 @@ class MainModeTests(unittest.TestCase):
         self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
         self.assertEqual(args.output_name, "demo_patched")
 
+    def test_build_parser_supports_agent_loop(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "agent-loop",
+                "--root",
+                "/tmp/demo",
+                "--plan",
+                "/tmp/demo/binary-plan.json",
+                "--analysis-json",
+                "/tmp/demo/analysis.json",
+                "--model-response-jsonl",
+                "/tmp/demo/model.jsonl",
+                "--output",
+                "/tmp/demo/trajectory.json",
+                "--state",
+                "/tmp/demo/loop-state.json",
+                "--executor-state",
+                "/tmp/demo/executor-state.json",
+                "--max-steps",
+                "3",
+                "--max-failures",
+                "2",
+                "--dry-run",
+            ]
+        )
+
+        self.assertEqual(args.command, "agent-loop")
+        self.assertEqual(args.plan, Path("/tmp/demo/binary-plan.json"))
+        self.assertEqual(args.model_response_jsonl, Path("/tmp/demo/model.jsonl"))
+        self.assertEqual(args.max_steps, 3)
+        self.assertEqual(args.max_failures, 2)
+        self.assertTrue(args.dry_run)
+
     def test_main_routes_audit_commands_to_audit_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
