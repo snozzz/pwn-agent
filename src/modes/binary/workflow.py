@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import json
 import re
+import signal
 import shutil
 import subprocess
 from typing import Any
@@ -13,6 +14,7 @@ from ...config import AgentConfig
 from ...policy import CommandPolicy, CommandResult, PolicyError
 
 ANALYSIS_SCHEMA = "pwn-agent.binary-analysis.v1"
+TRIAGE_SCHEMA = "pwn-agent.binary-crash-triage.v1"
 PLAN_SCHEMA = "pwn-agent.binary-plan.v1"
 VERIFY_SCHEMA = "pwn-agent.binary-verify.v1"
 STAGE_ORDER = ["identify", "inspect", "triage", "validate", "patch", "revalidate"]
@@ -204,6 +206,9 @@ def scan_binary(
 
 
 def render_binary_audit_markdown(artifact: dict[str, Any]) -> str:
+    if artifact.get("schema") == TRIAGE_SCHEMA:
+        return render_binary_triage_markdown(artifact)
+
     lines = ["# Binary Audit", ""]
     target = dict(artifact.get("target") or {})
     lines.append(f"- Binary: `{target.get('binary_path')}`")
@@ -242,6 +247,31 @@ def render_binary_audit_markdown(artifact: dict[str, Any]) -> str:
             )
 
     lines.extend(["", "## Tool Evidence", ""])
+    for entry in artifact.get("evidence", []):
+        lines.append(
+            f"- {entry.get('id')} ({entry.get('tool')}): status={entry.get('status')} "
+            f"available={str(entry.get('available')).lower()} rc={entry.get('returncode')}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_binary_triage_markdown(artifact: dict[str, Any]) -> str:
+    lines = ["# Crash Triage", ""]
+    target = dict(artifact.get("target") or {})
+    execution = dict(artifact.get("execution_result") or {})
+    crash_summary = dict(artifact.get("crash_summary") or {})
+    debugger = dict(artifact.get("debugger_summary") or {})
+
+    lines.append(f"- Binary: `{target.get('binary_path')}`")
+    lines.append(f"- Exit code: {execution.get('exit_code')}")
+    lines.append(f"- Signal: {execution.get('signal_name')}")
+    lines.append(f"- Timed out: {str(execution.get('timed_out')).lower()}")
+    lines.append(f"- Suspicious: {str(crash_summary.get('suspicious')).lower()}")
+    lines.append(f"- Reason: {crash_summary.get('reason')}")
+    lines.append(f"- GDB attempted: {str(debugger.get('attempted')).lower()}")
+    lines.append(f"- GDB collected: {str(debugger.get('collected')).lower()}")
+
+    lines.extend(["", "## Evidence", ""])
     for entry in artifact.get("evidence", []):
         lines.append(
             f"- {entry.get('id')} ({entry.get('tool')}): status={entry.get('status')} "
@@ -399,6 +429,7 @@ def verify_binary_execution(
 
     input_text = _read_optional_sample(effective_stdin_file)
     run_args = args or []
+    _validate_runtime_args_for_workspace(run_args, workspace_root=resolved_root, cwd=resolved_binary.parent)
     safe_argv, safe_cwd = policy.validate([f"./{resolved_binary.name}", *run_args], cwd=resolved_binary.parent)
 
     try:
@@ -436,6 +467,321 @@ def verify_binary_execution(
         "stderr_head": _head_lines(stderr),
     }
     return returncode, artifact
+
+
+def triage_binary_crash(
+    *,
+    root: Path,
+    binary: Path,
+    stdin_file: Path | None = None,
+    stdin_text: str | None = None,
+    args: list[str] | None = None,
+    timeout_seconds: int | None = None,
+    gdb_batch: bool = False,
+    config: AgentConfig | None = None,
+) -> dict[str, Any]:
+    resolved_root = root.resolve()
+    resolved_binary = binary.resolve()
+    if not resolved_binary.exists() or not resolved_binary.is_file():
+        raise ValueError(f"binary not found: {resolved_binary}")
+    if stdin_file is not None and stdin_text is not None:
+        raise ValueError("stdin_file and stdin_text are mutually exclusive")
+
+    cfg = config or AgentConfig()
+    effective_timeout = int(timeout_seconds) if timeout_seconds is not None else cfg.timeout_seconds
+    policy = CommandPolicy(
+        resolved_root,
+        allowlist=cfg.allowlist,
+        timeout_seconds=effective_timeout,
+    )
+
+    run_args = list(args or [])
+    input_text = stdin_text if stdin_text is not None else _read_optional_sample(stdin_file, max_bytes=4096)
+    execution = _run_bounded_binary_process(
+        policy,
+        binary=resolved_binary,
+        args=run_args,
+        input_text=input_text,
+        timeout_seconds=effective_timeout,
+    )
+    crash_summary = _summarize_crash(execution)
+
+    debugger_summary = {
+        "backend": "gdb",
+        "attempted": False,
+        "available": False,
+        "collected": False,
+        "returncode": None,
+        "timed_out": False,
+        "registers": [],
+        "backtrace": [],
+        "disassembly": [],
+        "mappings": [],
+        "error": None,
+    }
+    evidence = [execution["evidence"]]
+
+    if gdb_batch and crash_summary["should_debug"]:
+        debugger_summary, debugger_evidence = _run_gdb_batch(
+            policy,
+            binary=resolved_binary,
+            args=run_args,
+        )
+        evidence.append(debugger_evidence)
+
+    return {
+        "schema": TRIAGE_SCHEMA,
+        "schema_version": 1,
+        "artifact_type": "binary_crash_triage",
+        "mode": "binary",
+        "target": {
+            "root": str(resolved_root),
+            "binary_path": str(resolved_binary),
+            "binary_name": resolved_binary.name,
+            "size_bytes": resolved_binary.stat().st_size,
+            "sha256": _sha256_file(resolved_binary),
+        },
+        "execution_result": {
+            "argv": execution["argv"],
+            "exit_code": execution["exit_code"],
+            "signal": execution["signal"],
+            "signal_name": execution["signal_name"],
+            "timed_out": execution["timed_out"],
+            "stdout_head": execution["stdout"]["lines"],
+            "stderr_head": execution["stderr"]["lines"],
+            "stdout_truncated": execution["stdout"]["truncated"],
+            "stderr_truncated": execution["stderr"]["truncated"],
+        },
+        "crash_summary": {
+            "crashed": crash_summary["crashed"],
+            "suspicious": crash_summary["suspicious"],
+            "reason": crash_summary["reason"],
+            "signal": execution["signal"],
+            "signal_name": execution["signal_name"],
+            "exit_code": execution["exit_code"],
+        },
+        "debugger_summary": debugger_summary,
+        "evidence": evidence,
+        "runtime_hints": {
+            "args": run_args,
+            "stdin_file_path": str(stdin_file.resolve()) if stdin_file is not None else None,
+            "stdin_text_present": stdin_text is not None,
+            "timeout_seconds": effective_timeout,
+            "gdb_batch": gdb_batch,
+        },
+        "root": str(resolved_root),
+        "binary_path": str(resolved_binary),
+    }
+
+
+def _run_bounded_binary_process(
+    policy: CommandPolicy,
+    *,
+    binary: Path,
+    args: list[str],
+    input_text: str | None,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    _validate_runtime_args_for_workspace(args, workspace_root=policy.workspace_root, cwd=binary.parent)
+    safe_argv, safe_cwd = policy.validate([f"./{binary.name}", *args], cwd=binary.parent)
+
+    try:
+        proc = subprocess.run(
+            safe_argv,
+            cwd=safe_cwd,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        returncode = proc.returncode
+        stdout = proc.stdout
+        stderr = proc.stderr
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        returncode = 124
+        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        stderr += f"\n[policy-timeout] command exceeded {timeout_seconds}s\n"
+        timed_out = True
+
+    signal_number = abs(returncode) if returncode < 0 else None
+    signal_name = _signal_name(signal_number)
+    stdout_capture = _truncate_capture(stdout, max_lines=80, max_chars=12000)
+    stderr_capture = _truncate_capture(stderr, max_lines=80, max_chars=12000)
+
+    return {
+        "argv": [str(binary), *args],
+        "exit_code": returncode,
+        "signal": signal_number,
+        "signal_name": signal_name,
+        "timed_out": timed_out,
+        "stdout": stdout_capture,
+        "stderr": stderr_capture,
+        "evidence": {
+            "id": "execution",
+            "tool": "direct-run",
+            "command": [str(binary), *args],
+            "available": True,
+            "status": "timeout" if timed_out else ("crash" if signal_number is not None else ("error" if returncode != 0 else "ok")),
+            "returncode": returncode,
+            "error": None,
+            "stdout": stdout_capture,
+            "stderr": stderr_capture,
+            "truncation": {
+                "stdout_truncated": bool(stdout_capture["truncated"]),
+                "stderr_truncated": bool(stderr_capture["truncated"]),
+            },
+        },
+    }
+
+
+def _summarize_crash(execution: dict[str, Any]) -> dict[str, Any]:
+    signal_number = execution.get("signal")
+    exit_code = int(execution.get("exit_code", 0))
+    timed_out = bool(execution.get("timed_out"))
+    stderr_lines = list(execution.get("stderr", {}).get("lines") or [])
+    sanitizer_signal = _has_sanitizer_signal("\n".join(stderr_lines))
+
+    reason = "clean-exit"
+    suspicious = False
+    crashed = False
+    should_debug = False
+
+    if timed_out:
+        reason = "timeout"
+        suspicious = True
+    elif signal_number is not None:
+        reason = f"signal:{execution.get('signal_name') or signal_number}"
+        suspicious = True
+        crashed = True
+        should_debug = True
+    elif exit_code != 0:
+        reason = f"nonzero-exit:{exit_code}"
+        suspicious = True
+        should_debug = True
+    elif sanitizer_signal:
+        reason = "sanitizer-signal"
+        suspicious = True
+        should_debug = True
+
+    return {
+        "crashed": crashed,
+        "suspicious": suspicious,
+        "reason": reason,
+        "should_debug": should_debug,
+    }
+
+
+def _run_gdb_batch(
+    policy: CommandPolicy,
+    *,
+    binary: Path,
+    args: list[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    expressions = [
+        "set pagination off",
+        "set confirm off",
+        "echo ===REGISTERS===\\n",
+        "info registers pc sp bp ax bx cx dx si di",
+        "echo ===BACKTRACE===\\n",
+        "bt",
+        "echo ===DISASSEMBLY===\\n",
+        "x/8i $pc-16",
+        "echo ===MAPPINGS===\\n",
+        "info proc mappings",
+        "echo ===END===\\n",
+    ]
+    argv = ["gdb", "--batch", "-q", "-nx"]
+    for expression in expressions:
+        argv.extend(["-ex", expression])
+    argv.extend(["--args", str(binary), *args])
+
+    evidence = {
+        "id": "debugger",
+        "tool": "gdb",
+        "command": argv,
+        "available": False,
+        "status": "unavailable",
+        "returncode": None,
+        "error": None,
+        "stdout": _empty_capture(),
+        "stderr": _empty_capture(),
+        "truncation": {
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        },
+    }
+
+    if "gdb" not in policy.allowlist or get_command_rule("gdb") is None:
+        summary = {
+            "backend": "gdb",
+            "attempted": True,
+            "available": False,
+            "collected": False,
+            "returncode": None,
+            "timed_out": False,
+            "registers": [],
+            "backtrace": [],
+            "disassembly": [],
+            "mappings": [],
+            "error": "gdb blocked by policy",
+        }
+        evidence["error"] = summary["error"]
+        return summary, evidence
+
+    if shutil.which("gdb") is None:
+        summary = {
+            "backend": "gdb",
+            "attempted": True,
+            "available": False,
+            "collected": False,
+            "returncode": None,
+            "timed_out": False,
+            "registers": [],
+            "backtrace": [],
+            "disassembly": [],
+            "mappings": [],
+            "error": "gdb not available",
+        }
+        evidence["error"] = summary["error"]
+        return summary, evidence
+
+    result = policy.run(argv, cwd=binary.parent)
+    stdout_capture = _truncate_capture(result.stdout, max_lines=160, max_chars=24000)
+    stderr_capture = _truncate_capture(result.stderr, max_lines=80, max_chars=12000)
+    stdout_text = "\n".join(stdout_capture["lines"])
+
+    sections = _parse_gdb_sections(stdout_text)
+    timed_out = result.returncode == 124
+    summary = {
+        "backend": "gdb",
+        "attempted": True,
+        "available": True,
+        "collected": not timed_out,
+        "returncode": result.returncode,
+        "timed_out": timed_out,
+        "registers": sections.get("REGISTERS", [])[:24],
+        "backtrace": sections.get("BACKTRACE", [])[:40],
+        "disassembly": sections.get("DISASSEMBLY", [])[:24],
+        "mappings": sections.get("MAPPINGS", [])[:40],
+        "error": None if result.returncode == 0 else stderr_capture["lines"][0] if stderr_capture["lines"] else None,
+    }
+    evidence.update(
+        {
+            "available": True,
+            "status": "timeout" if timed_out else ("ok" if result.returncode == 0 else "error"),
+            "returncode": result.returncode,
+            "stdout": stdout_capture,
+            "stderr": stderr_capture,
+            "truncation": {
+                "stdout_truncated": bool(stdout_capture["truncated"]),
+                "stderr_truncated": bool(stderr_capture["truncated"]),
+            },
+        }
+    )
+    return summary, evidence
 
 
 def _collect_tool_evidence(policy: CommandPolicy, spec: dict[str, Any], binary: Path) -> dict[str, Any]:
@@ -698,6 +1044,39 @@ def _sha256_file(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _parse_gdb_sections(text: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("===") and line.endswith("==="):
+            current = line.strip("=").strip()
+            sections.setdefault(current, [])
+            continue
+        if current is not None and line:
+            sections[current].append(line)
+    return sections
+
+
+def _signal_name(signal_number: int | None) -> str | None:
+    if signal_number is None:
+        return None
+    try:
+        return signal.Signals(signal_number).name
+    except ValueError:
+        return None
+
+
+def _validate_runtime_args_for_workspace(args: list[str], *, workspace_root: Path, cwd: Path) -> None:
+    for token in args:
+        if "/" not in token and not token.startswith("."):
+            continue
+        path = Path(token)
+        resolved = (cwd / path).resolve() if not path.is_absolute() else path.resolve()
+        if workspace_root not in resolved.parents and resolved != workspace_root:
+            raise ValueError(f"runtime arg escapes workspace root: {resolved}")
 
 
 def _has_sanitizer_signal(stderr: str) -> bool:

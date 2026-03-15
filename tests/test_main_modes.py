@@ -36,6 +36,34 @@ class MainModeTests(unittest.TestCase):
         self.assertEqual(args.args, ["one", "two"])
         self.assertEqual(args.timeout, 15)
 
+    def test_build_parser_supports_crash_triage_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "crash-triage",
+                "--root",
+                "/tmp/demo",
+                "--binary",
+                "/tmp/demo/app",
+                "--output",
+                "/tmp/demo/crash.json",
+                "--stdin-text",
+                "AAAA",
+                "--args",
+                "seed1",
+                "seed2",
+                "--timeout",
+                "9",
+                "--gdb-batch",
+            ]
+        )
+
+        self.assertEqual(args.command, "crash-triage")
+        self.assertEqual(args.stdin_text, "AAAA")
+        self.assertEqual(args.args, ["seed1", "seed2"])
+        self.assertEqual(args.timeout, 9)
+        self.assertTrue(args.gdb_batch)
+
     def test_main_routes_audit_commands_to_audit_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

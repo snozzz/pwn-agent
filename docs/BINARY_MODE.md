@@ -16,6 +16,7 @@
 Binary mode emits separate artifacts from source-audit outputs:
 
 - `pwn-agent.binary-analysis.v1` from `binary-scan`
+- `pwn-agent.binary-crash-triage.v1` from `crash-triage` / `binary-triage`
 - `pwn-agent.binary-plan.v1` from `binary-plan`
 - `pwn-agent.binary-verify.v1` from `binary-verify`
 - `binary-run` uses the bounded plan executor and writes an execution summary for plan progress
@@ -37,6 +38,7 @@ Binary mode tracks this stage sequence:
 Current command mapping:
 
 - `binary-scan` covers `identify` + `inspect` + `triage`
+- `crash-triage` / `binary-triage` covers bounded local execution plus optional debugger-backed crash triage
 - `binary-plan` emits stage-aware next actions
 - `binary-run` executes bounded ready actions (for example `binary-verify`)
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
@@ -49,6 +51,21 @@ Current command mapping:
 - `objdump`
 - `nm`
 - `strings` (truncated)
+
+`crash-triage` is bounded as follows:
+
+- direct local execution with fixed timeout
+- optional `gdb --batch -q -nx` only
+- fixed `-ex` command list only
+- no interactive debugger shell
+- truncated debugger output
+
+Crash triage artifacts normalize into these top-level sections:
+
+- `execution_result`: direct run argv, exit code, signal, timeout, stdout/stderr heads
+- `crash_summary`: normalized suspicion/crash reason for planner use
+- `debugger_summary`: bounded batch debugger results when attempted
+- `evidence`: normalized direct-run and debugger evidence entries with truncation metadata
 
 ## Safety and bounded execution
 

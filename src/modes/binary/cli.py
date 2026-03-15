@@ -12,6 +12,7 @@ from .workflow import (
     render_binary_audit_markdown,
     render_binary_plan_markdown,
     scan_binary,
+    triage_binary_crash,
     verify_binary_execution,
     write_binary_json,
 )
@@ -23,6 +24,7 @@ BINARY_COMMANDS = {
     "binary-verify",
     "binary-validate",
     "crash-triage",
+    "binary-triage",
 }
 
 
@@ -74,23 +76,38 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     binary_validate.add_argument("--config", type=Path, help="optional JSON config path")
     binary_validate.add_argument("args", nargs="*", help="arguments passed to the binary")
 
-    crash_triage = subparsers.add_parser("crash-triage", help="collect binary evidence focused on crash triage")
+    crash_triage = subparsers.add_parser("crash-triage", help="run bounded crash triage for a local binary")
     crash_triage.add_argument("--root", type=Path, required=True, help="workspace root")
     crash_triage.add_argument("--binary", type=Path, required=True, help="path to local ELF/binary")
-    crash_triage.add_argument("--output", type=Path, required=True, help="output binary audit json")
-    crash_triage.add_argument("--report", type=Path, help="optional markdown audit report")
-    crash_triage.add_argument("--stdin-file", dest="stdin_file", type=Path, help="optional stdin file metadata hint")
-    crash_triage.add_argument("--protocol-sample", type=Path, help="optional protocol/input sample file")
-    crash_triage.add_argument("--args", nargs="*", default=[], help="optional runtime argument hint list")
-    crash_triage.add_argument("--timeout", type=int, help="optional scan timeout override in seconds")
+    crash_triage.add_argument("--output", type=Path, required=True, help="output crash triage json")
+    crash_triage.add_argument("--report", type=Path, help="optional markdown crash triage report")
+    crash_stdin = crash_triage.add_mutually_exclusive_group()
+    crash_stdin.add_argument("--stdin-file", dest="stdin_file", type=Path, help="optional stdin file")
+    crash_stdin.add_argument("--stdin-text", dest="stdin_text", help="optional literal stdin text")
+    crash_triage.add_argument("--args", nargs="*", default=[], help="optional runtime argument list")
+    crash_triage.add_argument("--timeout", type=int, help="optional execution timeout override in seconds")
+    crash_triage.add_argument("--gdb-batch", action="store_true", help="collect bounded gdb batch evidence on suspicious exits")
     crash_triage.add_argument("--config", type=Path, help="optional JSON config path")
+
+    binary_triage = subparsers.add_parser("binary-triage", help="alias of crash-triage")
+    binary_triage.add_argument("--root", type=Path, required=True, help="workspace root")
+    binary_triage.add_argument("--binary", type=Path, required=True, help="path to local ELF/binary")
+    binary_triage.add_argument("--output", type=Path, required=True, help="output crash triage json")
+    binary_triage.add_argument("--report", type=Path, help="optional markdown crash triage report")
+    binary_triage_stdin = binary_triage.add_mutually_exclusive_group()
+    binary_triage_stdin.add_argument("--stdin-file", dest="stdin_file", type=Path, help="optional stdin file")
+    binary_triage_stdin.add_argument("--stdin-text", dest="stdin_text", help="optional literal stdin text")
+    binary_triage.add_argument("--args", nargs="*", default=[], help="optional runtime argument list")
+    binary_triage.add_argument("--timeout", type=int, help="optional execution timeout override in seconds")
+    binary_triage.add_argument("--gdb-batch", action="store_true", help="collect bounded gdb batch evidence on suspicious exits")
+    binary_triage.add_argument("--config", type=Path, help="optional JSON config path")
 
 
 def handle_command(args: argparse.Namespace) -> int | None:
     if args.command not in BINARY_COMMANDS:
         return None
 
-    if args.command in {"binary-scan", "crash-triage"}:
+    if args.command == "binary-scan":
         config = AgentConfig.load(args.config)
         artifact = scan_binary(
             root=args.root,
@@ -105,6 +122,24 @@ def handle_command(args: argparse.Namespace) -> int | None:
         if args.report:
             write_report(args.report, render_binary_audit_markdown(artifact))
         print(f"binary scan complete; wrote {args.output}")
+        return 0
+
+    if args.command in {"crash-triage", "binary-triage"}:
+        config = AgentConfig.load(args.config)
+        artifact = triage_binary_crash(
+            root=args.root,
+            binary=args.binary,
+            stdin_file=args.stdin_file,
+            stdin_text=args.stdin_text,
+            args=args.args,
+            timeout_seconds=args.timeout,
+            gdb_batch=args.gdb_batch,
+            config=config,
+        )
+        write_binary_json(args.output, artifact)
+        if args.report:
+            write_report(args.report, render_binary_audit_markdown(artifact))
+        print(f"crash triage complete; wrote {args.output}")
         return 0
 
     if args.command == "binary-plan":

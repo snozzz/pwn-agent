@@ -28,6 +28,7 @@ ALLOWED_MAIN_SUBCOMMANDS = {
     "rebuild-verify",
     "rebuild-plan",
     "binary-verify",
+    "binary-triage",
     "binary-scan",
     "binary-plan",
     "binary-run",
@@ -94,6 +95,52 @@ def _validate_python_main(argv: list[str], workspace_root: Path, cwd: Path) -> N
     _validate_main_cli(argv, workspace_root=workspace_root, expected_root=None, cwd=cwd)
 
 
+def _validate_runtime_argument_tokens(tokens: list[str], *, workspace_root: Path, cwd: Path) -> None:
+    for token in tokens:
+        if "/" not in token and not token.startswith("."):
+            continue
+        _require_workspace_bound_path(token, workspace_root=workspace_root, cwd=cwd, label="runtime arg")
+
+
+def _validate_gdb(argv: list[str], workspace_root: Path, cwd: Path) -> None:
+    approved_expressions = {
+        "set pagination off",
+        "set confirm off",
+        "echo ===REGISTERS===\\n",
+        "info registers pc sp bp ax bx cx dx si di",
+        "echo ===BACKTRACE===\\n",
+        "bt",
+        "echo ===DISASSEMBLY===\\n",
+        "x/8i $pc-16",
+        "echo ===MAPPINGS===\\n",
+        "info proc mappings",
+        "echo ===END===\\n",
+    }
+
+    if len(argv) < 8 or argv[1:4] != ["--batch", "-q", "-nx"]:
+        raise ValueError("gdb must use '--batch -q -nx'")
+
+    index = 4
+    while index < len(argv):
+        token = argv[index]
+        if token == "--args":
+            break
+        if token != "-ex" or index + 1 >= len(argv):
+            raise ValueError("gdb must use fixed '-ex <command>' pairs")
+        expression = argv[index + 1]
+        if expression not in approved_expressions:
+            raise ValueError(f"gdb command not allowed: {expression}")
+        index += 2
+
+    if index >= len(argv) or argv[index] != "--args":
+        raise ValueError("gdb must terminate setup with '--args'")
+    if index + 1 >= len(argv):
+        raise ValueError("gdb missing target after '--args'")
+
+    _require_workspace_bound_path(argv[index + 1], workspace_root=workspace_root, cwd=cwd, label="gdb target")
+    _validate_runtime_argument_tokens(argv[index + 2 :], workspace_root=workspace_root, cwd=cwd)
+
+
 COMMAND_POLICY_REGISTRY: dict[str, CommandRule] = {
     "ls": CommandRule("enumeration", "ls", "workspace", None, OutputTruncationPolicy(), _validate_any),
     "find": CommandRule("enumeration", "find", "workspace", None, OutputTruncationPolicy(), _validate_find),
@@ -123,6 +170,14 @@ COMMAND_POLICY_REGISTRY: dict[str, CommandRule] = {
     "cc": CommandRule("build", "cc", "workspace", None, OutputTruncationPolicy(), _validate_any),
     "clang-tidy": CommandRule("lint", "clang-tidy", "workspace", None, OutputTruncationPolicy(), _validate_any),
     "cppcheck": CommandRule("lint", "cppcheck", "workspace", None, OutputTruncationPolicy(), _validate_any),
+    "gdb": CommandRule(
+        "debugger",
+        "gdb",
+        "workspace",
+        15,
+        OutputTruncationPolicy(max_stdout_chars=24000, max_stderr_chars=12000),
+        _validate_gdb,
+    ),
     "python3": CommandRule("internal-main", "python3", "workspace", None, OutputTruncationPolicy(), _validate_python_main),
 }
 
