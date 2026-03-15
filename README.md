@@ -65,7 +65,7 @@ python3 -m src.main rebuild-target --root examples --index 1 --output-name vuln_
 python3 -m src.main rebuild-verify --root examples --index 1 --output-name vuln_demo_pipeline_asan --config pwn-agent.json
 python3 -m src.main binary-scan --root examples --binary examples/vuln_demo_asan --stdin-file examples/stdin.txt --args smoke-case demo-input --timeout 15 --output out/binary-analysis.json --report out/binary-audit.md
 python3 -m src.main crash-triage --root examples --binary examples/vuln_demo_asan --stdin-text AAAAAAAA --args smoke-case --timeout 10 --gdb-batch --output out/crash-triage.json --report out/crash-triage.md
-python3 -m src.main binary-plan --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --output out/binary-plan.json --report out/binary-plan.md
+python3 -m src.main binary-plan --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --verify-json out/binary-verify.json --output out/binary-plan.json --report out/binary-plan.md
 python3 -m src.main binary-run --plan out/binary-plan.json --output out/binary-run.json --report out/binary-run.md --dry-run
 python3 -m src.main binary-verify --root examples --binary examples/vuln_demo_asan --output out/binary-verify.json
 python3 -m src.main patch-validate --root examples --patch-script tests/fixtures/patch_script_replace_text.json --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --output out/patch-validation.json --report out/patch-validation.md
@@ -95,6 +95,7 @@ Crash triage now emits a separate bounded artifact with execution outcome, crash
 Binary planning is now stage-aware rather than only phase-aware, with explicit `identify -> inspect -> reproduce -> triage -> patch -> validate -> summarize` ordering and dependency-bearing next actions derived from binary evidence.
 Patch validation now accepts structured patch artifacts/scripts, reuses the bounded rebuild and binary execution primitives, and emits explicit launch/baseline/regression results plus residual-risk notes for the next defensive loop.
 The bounded `agent-loop` layer now lets a model choose only from dependency-resolved plan actions using structured JSON; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later fine-tuning.
+`binary-verify` artifacts now participate in replanning as real runtime evidence, so loop replanning is no longer a no-op after validation steps.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,

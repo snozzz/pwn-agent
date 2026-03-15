@@ -50,6 +50,11 @@ Current command mapping:
 - `patch-validate` applies a structured patch artifact/script, optionally rebuilds a target, and validates launch/baseline/regression behavior
 - `agent-loop` consumes structured model choices over bounded plan actions and logs the resulting local trajectory
 
+`binary-plan` now treats `binary-verify` artifacts as first-class replanning input:
+
+- clean verify results suppress redundant replay/verify actions
+- failing verify results produce bounded follow-up triage actions
+
 `binary-scan` evidence collection is bounded to local tools:
 
 - `file`

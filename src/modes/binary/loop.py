@@ -279,9 +279,10 @@ def _replan_from_artifacts(artifact_paths: dict[str, Any], plan_output_path: Pat
     analysis = _load_optional_artifact(artifact_paths.get("analysis_json"))
     crash = _load_optional_artifact(artifact_paths.get("crash_json"))
     validation = _load_optional_artifact(artifact_paths.get("patch_validation_json"))
-    if analysis is None and crash is None and validation is None:
+    verify = _load_optional_artifact(artifact_paths.get("verify_json"))
+    if analysis is None and crash is None and validation is None and verify is None:
         return None
-    plan = build_binary_plan(analysis, crash=crash, validation=validation)
+    plan = build_binary_plan(analysis, crash=crash, validation=validation, verify=verify)
     write_binary_json(plan_output_path, plan)
     return plan
 

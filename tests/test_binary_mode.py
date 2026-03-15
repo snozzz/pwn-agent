@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from src.executor import execute_plan
-from src.modes.binary.workflow import ANALYSIS_SCHEMA, PLAN_SCHEMA, TRIAGE_SCHEMA, build_binary_plan
+from src.modes.binary.workflow import ANALYSIS_SCHEMA, PLAN_SCHEMA, TRIAGE_SCHEMA, VERIFY_SCHEMA, build_binary_plan
 
 
 class BinaryModeTests(unittest.TestCase):
@@ -168,6 +168,58 @@ class BinaryModeTests(unittest.TestCase):
         self.assertEqual(validate_action["blocked_by"], ["draft-patch-hypothesis"])
         self.assertEqual(validate_action["suggested_cli"][3], "binary-verify")
         self.assertLess(patch_index, validate_index)
+
+    def test_binary_plan_uses_clean_verify_artifact_to_suppress_redundant_verify_and_replay(self) -> None:
+        analysis = {
+            "schema": ANALYSIS_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "mitigations": {"available": True, "nx": "enabled"},
+            "patch_candidate": {
+                "summary": "bounds check candidate",
+            },
+        }
+        verify = {
+            "schema": VERIFY_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "argv": ["/tmp/demo/app", "seed"],
+            "stdin_file_path": None,
+            "returncode": 0,
+            "sanitizer_signal": False,
+        }
+
+        plan = build_binary_plan(analysis, verify=verify)
+        ids = [action["id"] for action in plan["next_actions"]]
+
+        self.assertEqual(plan["source_artifacts"]["verify_schema"], VERIFY_SCHEMA)
+        self.assertNotIn("reproduce-target-behavior", ids)
+        self.assertNotIn("validate-candidate-patch", ids)
+        self.assertEqual(ids, ["review-binary-evidence", "summarize-local-findings"])
+
+    def test_binary_plan_uses_failing_verify_artifact_to_request_triage(self) -> None:
+        analysis = {
+            "schema": ANALYSIS_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "mitigations": {"available": True, "nx": "enabled"},
+        }
+        verify = {
+            "schema": VERIFY_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "argv": ["/tmp/demo/app", "boom"],
+            "stdin_file_path": "/tmp/demo/stdin.bin",
+            "returncode": 1,
+            "sanitizer_signal": True,
+        }
+
+        plan = build_binary_plan(analysis, verify=verify)
+        triage_action = next(action for action in plan["next_actions"] if action["id"] == "triage-verify-failure")
+
+        self.assertEqual(triage_action["stage"], "reproduce")
+        self.assertEqual(triage_action["suggested_cli"][3], "crash-triage")
+        self.assertIn("--stdin-file", triage_action["suggested_cli"])
 
     def test_executor_favors_earlier_binary_stages_before_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

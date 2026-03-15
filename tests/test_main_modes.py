@@ -80,6 +80,21 @@ class MainModeTests(unittest.TestCase):
         self.assertIsNone(args.analysis_json)
         self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
 
+    def test_build_parser_supports_binary_plan_from_verify_artifact(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "binary-plan",
+                "--verify-json",
+                "/tmp/demo/verify.json",
+                "--output",
+                "/tmp/demo/binary-plan.json",
+            ]
+        )
+
+        self.assertEqual(args.command, "binary-plan")
+        self.assertEqual(args.verify_json, Path("/tmp/demo/verify.json"))
+
     def test_build_parser_supports_patch_validate(self) -> None:
         parser = build_parser()
         args = parser.parse_args(

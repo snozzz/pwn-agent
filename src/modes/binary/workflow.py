@@ -293,18 +293,22 @@ def build_binary_plan(
     *,
     crash: dict[str, Any] | None = None,
     validation: dict[str, Any] | None = None,
+    verify: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if analysis is None and crash is None and validation is None:
+    if analysis is None and crash is None and validation is None and verify is None:
         raise ValueError("binary plan requires at least one artifact")
 
-    root = _resolve_binary_root(analysis, crash, validation)
-    binary_path = _resolve_binary_path(analysis, crash, validation)
-    stdin_file_path, runtime_args = _extract_runtime_hints(analysis, crash)
+    root = _resolve_binary_root(analysis, crash, validation, verify)
+    binary_path = _resolve_binary_path(analysis, crash, validation, verify)
+    stdin_file_path, runtime_args = _extract_runtime_hints(analysis, crash, verify)
     patch_candidate = _extract_patch_candidate(analysis, crash, validation)
     analysis_has_mitigations = _analysis_has_mitigations(analysis)
     crash_suspicious = bool(crash and dict(crash.get("crash_summary") or {}).get("suspicious"))
     debugger_collected = bool(crash and dict(crash.get("debugger_summary") or {}).get("collected"))
-    validation_present = bool(_extract_validation_result(analysis, crash, validation))
+    verify_result = _extract_verify_result(verify)
+    verify_present = verify_result is not None
+    verify_issue = bool(verify_result and (verify_result.get("sanitizer_signal") or int(verify_result.get("returncode", 0)) != 0))
+    validation_present = bool(_extract_validation_result(analysis, crash, validation, verify))
 
     actions: list[dict[str, Any]] = []
     if not analysis_has_mitigations:
@@ -334,7 +338,26 @@ def build_binary_plan(
             )
         )
 
-    if crash is None:
+    if crash_suspicious and not debugger_collected:
+        actions.append(
+            _binary_plan_action(
+                action_id="collect-debugger-context",
+                stage="triage",
+                kind="crash_triage_gdb",
+                status="ready",
+                priority=92,
+                rationale="the crash artifact is suspicious but does not include bounded debugger context",
+                expected_artifacts=["binary-crash-triage-gdb.json"],
+                suggested_cli=_build_crash_triage_cli(
+                    root,
+                    binary_path,
+                    stdin_file_path=stdin_file_path,
+                    runtime_args=runtime_args,
+                    gdb_batch=True,
+                ),
+            )
+        )
+    elif crash is None and not verify_present:
         actions.append(
             _binary_plan_action(
                 action_id="reproduce-target-behavior",
@@ -353,22 +376,22 @@ def build_binary_plan(
                 ),
             )
         )
-    elif crash_suspicious and not debugger_collected:
+    elif verify_issue and not crash_suspicious:
         actions.append(
             _binary_plan_action(
-                action_id="collect-debugger-context",
-                stage="triage",
-                kind="crash_triage_gdb",
+                action_id="triage-verify-failure",
+                stage="reproduce",
+                kind="crash_triage",
                 status="ready",
-                priority=92,
-                rationale="the crash artifact is suspicious but does not include bounded debugger context",
-                expected_artifacts=["binary-crash-triage-gdb.json"],
+                priority=94,
+                rationale="the latest verify artifact reported a non-clean runtime result and needs bounded crash triage evidence",
+                expected_artifacts=["binary-crash-triage.json"],
                 suggested_cli=_build_crash_triage_cli(
                     root,
                     binary_path,
                     stdin_file_path=stdin_file_path,
                     runtime_args=runtime_args,
-                    gdb_batch=True,
+                    gdb_batch=False,
                 ),
             )
         )
@@ -447,9 +470,10 @@ def build_binary_plan(
             "analysis_schema": (analysis.get("schema") if analysis is not None else None),
             "crash_schema": (crash.get("schema") if crash is not None else None),
             "validation_schema": (validation.get("schema") if validation is not None else None),
+            "verify_schema": (verify.get("schema") if verify is not None else None),
         },
         "binary_path": binary_path,
-        "binary_fingerprint": (analysis.get("binary_fingerprint") if analysis is not None else None) or (analysis.get("target") if analysis is not None else None) or (crash.get("target") if crash is not None else None) or (validation.get("target") if validation is not None else None),
+        "binary_fingerprint": (analysis.get("binary_fingerprint") if analysis is not None else None) or (analysis.get("target") if analysis is not None else None) or (crash.get("target") if crash is not None else None) or (validation.get("target") if validation is not None else None) or (verify.get("target") if verify is not None else None),
         "readiness": readiness,
         "next_actions": ordered_actions,
     }
@@ -487,6 +511,7 @@ def _resolve_binary_root(
     analysis: dict[str, Any] | None,
     crash: dict[str, Any] | None,
     validation: dict[str, Any] | None,
+    verify: dict[str, Any] | None,
 ) -> str:
     candidates = [
         str(item)
@@ -497,6 +522,8 @@ def _resolve_binary_root(
             (crash or {}).get("target", {}).get("root"),
             (validation or {}).get("root"),
             (validation or {}).get("target", {}).get("root"),
+            (verify or {}).get("root"),
+            (verify or {}).get("target", {}).get("root"),
         ]
         if item
     ]
@@ -512,6 +539,7 @@ def _resolve_binary_path(
     analysis: dict[str, Any] | None,
     crash: dict[str, Any] | None,
     validation: dict[str, Any] | None,
+    verify: dict[str, Any] | None,
 ) -> str:
     candidates = [
         str(item)
@@ -522,6 +550,8 @@ def _resolve_binary_path(
             (crash or {}).get("target", {}).get("binary_path"),
             (validation or {}).get("binary_path"),
             (validation or {}).get("target", {}).get("binary_path"),
+            (verify or {}).get("binary_path"),
+            (verify or {}).get("target", {}).get("binary_path"),
         ]
         if item
     ]
@@ -533,17 +563,23 @@ def _resolve_binary_path(
     return unique[0]
 
 
-def _extract_runtime_hints(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+def _extract_runtime_hints(
+    analysis: dict[str, Any] | None,
+    crash: dict[str, Any] | None,
+    verify: dict[str, Any] | None,
+) -> tuple[str | None, list[str]]:
     stdin_file_path = (
         (analysis or {}).get("runtime_hints", {}).get("stdin_file_path")
         or (analysis or {}).get("inputs", {}).get("stdin_file_path")
         or (analysis or {}).get("inputs", {}).get("stdin_sample_path")
         or (crash or {}).get("runtime_hints", {}).get("stdin_file_path")
+        or (verify or {}).get("stdin_file_path")
     )
     runtime_args = list(
         (analysis or {}).get("runtime_hints", {}).get("args")
         or (analysis or {}).get("inputs", {}).get("args")
         or (crash or {}).get("runtime_hints", {}).get("args")
+        or (list((verify or {}).get("argv") or [])[1:] if isinstance((verify or {}).get("argv"), list) else [])
         or []
     )
     return (str(Path(stdin_file_path).resolve()) if stdin_file_path else None), runtime_args
@@ -562,9 +598,19 @@ def _extract_validation_result(
     analysis: dict[str, Any] | None,
     crash: dict[str, Any] | None,
     validation: dict[str, Any] | None,
+    verify: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    payload = (validation or {}).get("validation_result") or (crash or {}).get("validation_result") or (analysis or {}).get("validation_result")
+    payload = (validation or {}).get("validation_result") or _extract_verify_result(verify) or (crash or {}).get("validation_result") or (analysis or {}).get("validation_result")
     return dict(payload) if isinstance(payload, dict) else None
+
+
+def _extract_verify_result(verify: dict[str, Any] | None) -> dict[str, Any] | None:
+    if verify is None or verify.get("schema") != VERIFY_SCHEMA:
+        return None
+    return {
+        "returncode": verify.get("returncode"),
+        "sanitizer_signal": bool(verify.get("sanitizer_signal")),
+    }
 
 
 def _analysis_has_mitigations(analysis: dict[str, Any] | None) -> bool:

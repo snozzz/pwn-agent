@@ -6,9 +6,10 @@
 
 - `pwn-agent.binary-analysis.v1` from `binary-scan`
 - `pwn-agent.binary-crash-triage.v1` from `crash-triage` / `binary-triage`
-- optional future `pwn-agent.binary-verify.v1` or patch metadata embedded into those artifacts
+- `pwn-agent.binary-verify.v1` from `binary-verify`
+- optional `pwn-agent.binary-patch-validation.v1` from `patch-validate`
 
-At least one binary artifact is required. If both analysis and crash artifacts are provided, they must agree on:
+At least one binary artifact is required. If multiple artifacts are provided, they must agree on:
 
 - `root`
 - `binary_path`
@@ -66,10 +67,12 @@ This differs from the audit planner, which is phase-oriented first. For binary w
 Current deterministic planning rules:
 
 - no mitigations summary yet: suggest `binary-scan`
-- no crash artifact yet: suggest `crash-triage`
+- no crash artifact and no verify artifact yet: suggest `crash-triage`
+- clean verify artifact: treat it as existing runtime-validation evidence, suppress redundant replay/verify work
+- failing verify artifact: suggest bounded `crash-triage` using the verify inputs to collect reproducible triage evidence
 - suspicious crash without debugger context: suggest `crash-triage --gdb-batch`
 - suspicious crash: add `draft-patch-hypothesis` as a patch-stage context action
-- patch candidate exists without validation evidence: suggest `binary-verify`
+- patch candidate exists without validation evidence from patch-validation or verify artifacts: suggest `binary-verify`
 - summary stays blocked behind earlier ready actions
 
 Ordering is deterministic:
@@ -85,5 +88,5 @@ Compared with the older `plan-audit` schema:
 - `plan-audit` is source-audit oriented and primarily grouped around `triage`, `execution`, and `synthesis`
 - `binary-plan.v2` keeps `phase` for executor compatibility, but adds an explicit binary workflow `stage`
 - binary actions now always declare `expected_artifacts` so later local loops can reason about missing evidence
-- binary plans carry `source_artifacts` to make the analysis/crash provenance explicit
+- binary plans carry `source_artifacts` to make the analysis/crash/verify provenance explicit
 - executor ordering now prefers earlier binary investigation stages before later summary or synthesis actions

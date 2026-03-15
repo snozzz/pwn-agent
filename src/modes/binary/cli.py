@@ -69,6 +69,7 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     binary_plan.add_argument("--analysis-json", type=Path, help="input binary analysis json")
     binary_plan.add_argument("--crash-json", type=Path, help="optional binary crash triage json")
     binary_plan.add_argument("--patch-validation-json", type=Path, help="optional patch validation json")
+    binary_plan.add_argument("--verify-json", type=Path, help="optional binary verify json")
     binary_plan.add_argument("--output", type=Path, required=True, help="output binary plan json")
     binary_plan.add_argument("--report", type=Path, help="optional markdown plan report")
 
@@ -211,12 +212,20 @@ def handle_command(args: argparse.Namespace) -> int | None:
         return 0
 
     if args.command == "binary-plan":
-        if args.analysis_json is None and args.crash_json is None and args.patch_validation_json is None:
-            raise ValueError("binary-plan requires --analysis-json, --crash-json, --patch-validation-json, or a combination")
+        if (
+            args.analysis_json is None
+            and args.crash_json is None
+            and args.patch_validation_json is None
+            and args.verify_json is None
+        ):
+            raise ValueError(
+                "binary-plan requires --analysis-json, --crash-json, --patch-validation-json, --verify-json, or a combination"
+            )
         analysis = load_binary_artifact(args.analysis_json) if args.analysis_json is not None else None
         crash = load_binary_artifact(args.crash_json) if args.crash_json is not None else None
         validation = load_binary_artifact(args.patch_validation_json) if args.patch_validation_json is not None else None
-        plan = build_binary_plan(analysis, crash=crash, validation=validation)
+        verify = load_binary_artifact(args.verify_json) if args.verify_json is not None else None
+        plan = build_binary_plan(analysis, crash=crash, validation=validation, verify=verify)
         write_binary_json(args.output, plan)
         if args.report:
             write_report(args.report, render_binary_plan_markdown(plan))
