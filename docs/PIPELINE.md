@@ -9,4 +9,4 @@ The MVP now includes a compact pipeline that can:
 
 ## Why this matters
 
-This is the first real end-to-end loop in the project. It moves the repository closer to an actual security analysis agent instead of a collection of standalone helpers.
+This is one bounded audit-mode validation path. It preserves rebuild and verification evidence without implying broader autonomy than the current implementation provides.

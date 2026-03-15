@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.executor import execute_plan
 from src.modes.binary.workflow import (
@@ -13,6 +15,7 @@ from src.modes.binary.workflow import (
     TRIAGE_SCHEMA,
     VERIFY_SCHEMA,
     build_binary_plan,
+    verify_binary_execution,
 )
 
 
@@ -283,6 +286,90 @@ class BinaryModeTests(unittest.TestCase):
         self.assertEqual(triage_action["stage"], "reproduce")
         self.assertEqual(triage_action["suggested_cli"][3], "crash-triage")
         self.assertIn("--stdin-file", triage_action["suggested_cli"])
+
+    def test_binary_plan_uses_timeout_verify_artifact_to_request_triage(self) -> None:
+        analysis = {
+            "schema": ANALYSIS_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "mitigations": {"available": True, "nx": "enabled"},
+        }
+        verify = {
+            "schema": VERIFY_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "argv": ["/tmp/demo/app", "seed"],
+            "stdin_file_path": None,
+            "returncode": 124,
+            "timed_out": True,
+            "signal_name": None,
+            "sanitizer_signal": False,
+        }
+
+        plan = build_binary_plan(analysis, verify=verify)
+        triage_action = next(action for action in plan["next_actions"] if action["id"] == "triage-verify-failure")
+
+        self.assertEqual(triage_action["stage"], "reproduce")
+        self.assertEqual(triage_action["suggested_cli"][3], "crash-triage")
+
+    def test_binary_plan_uses_signal_verify_artifact_to_request_triage(self) -> None:
+        analysis = {
+            "schema": ANALYSIS_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "mitigations": {"available": True, "nx": "enabled"},
+        }
+        verify = {
+            "schema": VERIFY_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "argv": ["/tmp/demo/app"],
+            "stdin_file_path": None,
+            "returncode": -11,
+            "timed_out": False,
+            "signal_name": "SIGSEGV",
+            "sanitizer_signal": False,
+        }
+
+        plan = build_binary_plan(analysis, verify=verify)
+        triage_action = next(action for action in plan["next_actions"] if action["id"] == "triage-verify-failure")
+
+        self.assertEqual(triage_action["stage"], "reproduce")
+        self.assertEqual(triage_action["priority"], 94)
+
+    def test_verify_binary_execution_records_timeout_and_signal_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "demo.bin"
+            binary.write_bytes(b"\x7fELF" + b"A" * 64)
+
+            timeout_exc = subprocess.TimeoutExpired(cmd=["./demo.bin"], timeout=20, output="waiting", stderr="hang")
+            with patch("src.modes.binary.workflow.subprocess.run", side_effect=timeout_exc):
+                returncode, artifact = verify_binary_execution(root=root, binary=binary)
+
+            self.assertEqual(returncode, 124)
+            self.assertTrue(artifact["timed_out"])
+            self.assertIsNone(artifact["signal_name"])
+            self.assertEqual(artifact["schema"], VERIFY_SCHEMA)
+
+    def test_binary_plan_without_verify_preserves_existing_behavior(self) -> None:
+        analysis = {
+            "schema": ANALYSIS_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "mitigations": {"available": True, "nx": "enabled"},
+            "runtime_hints": {
+                "args": ["seed"],
+                "stdin_file_path": None,
+            },
+        }
+
+        plan = build_binary_plan(analysis)
+
+        self.assertEqual(
+            [action["id"] for action in plan["next_actions"]],
+            ["review-binary-evidence", "reproduce-target-behavior", "summarize-local-findings"],
+        )
 
     def test_executor_favors_earlier_binary_stages_before_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

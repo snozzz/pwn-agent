@@ -307,7 +307,15 @@ def build_binary_plan(
     debugger_collected = bool(crash and dict(crash.get("debugger_summary") or {}).get("collected"))
     verify_result = _extract_verify_result(verify)
     verify_present = verify_result is not None
-    verify_issue = bool(verify_result and (verify_result.get("sanitizer_signal") or int(verify_result.get("returncode", 0)) != 0))
+    verify_issue = bool(
+        verify_result
+        and (
+            verify_result.get("sanitizer_signal")
+            or verify_result.get("timed_out")
+            or bool(verify_result.get("signal_name"))
+            or int(verify_result.get("returncode", 0)) != 0
+        )
+    )
     validation_present = bool(_extract_validation_result(analysis, crash, validation, verify))
 
     actions: list[dict[str, Any]] = []
@@ -609,6 +617,8 @@ def _extract_verify_result(verify: dict[str, Any] | None) -> dict[str, Any] | No
         return None
     return {
         "returncode": verify.get("returncode"),
+        "timed_out": bool(verify.get("timed_out")),
+        "signal_name": verify.get("signal_name"),
         "sanitizer_signal": bool(verify.get("sanitizer_signal")),
     }
 
@@ -781,13 +791,16 @@ def verify_binary_execution(
         returncode = proc.returncode
         stdout = proc.stdout
         stderr = proc.stderr
+        timed_out = False
     except subprocess.TimeoutExpired as exc:
         returncode = 124
         stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
         stderr += f"\n[policy-timeout] command exceeded {policy.timeout_seconds}s\n"
+        timed_out = True
 
     sanitizer_signal = _has_sanitizer_signal(stderr)
+    signal_name = _signal_name(abs(returncode)) if returncode < 0 else None
     artifact = {
         "schema": VERIFY_SCHEMA,
         "schema_version": 1,
@@ -798,6 +811,8 @@ def verify_binary_execution(
         "stdin_file_path": str(effective_stdin_file.resolve()) if effective_stdin_file else None,
         "protocol_sample_path": str(protocol_sample.resolve()) if protocol_sample else None,
         "returncode": returncode,
+        "timed_out": timed_out,
+        "signal_name": signal_name,
         "sanitizer_signal": sanitizer_signal,
         "stdout_head": _head_lines(stdout),
         "stderr_head": _head_lines(stderr),

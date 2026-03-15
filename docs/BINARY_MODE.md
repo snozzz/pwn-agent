@@ -59,7 +59,7 @@ Execution boundary:
 `binary-plan` now treats `binary-verify` artifacts as first-class replanning input:
 
 - clean verify results suppress redundant replay/verify actions
-- failing verify results produce bounded follow-up triage actions
+- non-clean verify results (`sanitizer_signal`, timeout, signal-based crash, or nonzero return) produce bounded follow-up triage actions
 - absent verify input leaves prior planner behavior unchanged
 
 `patch-validate` now uses isolated scratch workspaces under `.pwn-agent/patch-workspaces/...` so the original workspace tree is not mutated during validation.

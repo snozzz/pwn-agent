@@ -69,7 +69,7 @@ Current deterministic planning rules:
 - no mitigations summary yet: suggest `binary-scan`
 - no crash artifact and no verify artifact yet: suggest `crash-triage`
 - clean verify artifact: treat it as existing runtime-validation evidence, suppress redundant replay/verify work
-- failing verify artifact: suggest bounded `crash-triage` using the verify inputs to collect reproducible triage evidence
+- non-clean verify artifact (`sanitizer_signal`, timeout, signal-based crash, or nonzero return): suggest bounded `crash-triage` using the verify inputs to collect reproducible triage evidence
 - suspicious crash without debugger context: suggest `crash-triage --gdb-batch`
 - suspicious crash: add `draft-patch-hypothesis` as a patch-stage context action
 - patch candidate exists without validation evidence from patch-validation or verify artifacts: suggest `binary-verify`
@@ -78,7 +78,7 @@ Current deterministic planning rules:
 Verify artifacts are therefore real planner inputs rather than loop-only bookkeeping:
 
 - clean verify evidence can unblock later summarize work by removing redundant runtime-validation steps
-- failing verify evidence can introduce or reprioritize bounded triage actions
+- non-clean verify evidence can introduce or reprioritize bounded triage actions
 - when verify input is absent, planner behavior falls back to the analysis/crash/patch-validation evidence already provided
 
 Ordering is deterministic:
