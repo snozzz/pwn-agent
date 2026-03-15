@@ -94,6 +94,7 @@ The binary analysis artifact is a bounded local evidence bundle (target metadata
 Crash triage now emits a separate bounded artifact with execution outcome, crash summary, optional batch debugger summary, and normalized evidence records suitable for later planner/model use.
 Binary planning is now stage-aware rather than only phase-aware, with explicit `identify -> inspect -> reproduce -> triage -> patch -> validate -> summarize` ordering and dependency-bearing next actions derived from binary evidence.
 Patch validation now accepts structured patch artifacts/scripts, reuses the bounded rebuild and binary execution primitives, and emits explicit launch/baseline/regression results plus residual-risk notes for the next defensive loop.
+Patch validation now runs inside isolated scratch workspaces under `.pwn-agent/patch-workspaces/...`, so repeated validation attempts do not contaminate the original workspace tree.
 The bounded `agent-loop` layer now lets a model choose only from dependency-resolved plan actions using structured JSON; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later fine-tuning.
 `binary-verify` artifacts now participate in replanning as real runtime evidence, so loop replanning is no longer a no-op after validation steps.
 

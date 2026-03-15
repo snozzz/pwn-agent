@@ -112,6 +112,7 @@ class MainModeTests(unittest.TestCase):
                 "/tmp/demo/patch-validation.json",
                 "--output-name",
                 "demo_patched",
+                "--cleanup-on-success",
             ]
         )
 
@@ -120,6 +121,7 @@ class MainModeTests(unittest.TestCase):
         self.assertEqual(args.analysis_json, Path("/tmp/demo/analysis.json"))
         self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
         self.assertEqual(args.output_name, "demo_patched")
+        self.assertTrue(args.cleanup_on_success)
 
     def test_build_parser_supports_agent_loop(self) -> None:
         parser = build_parser()

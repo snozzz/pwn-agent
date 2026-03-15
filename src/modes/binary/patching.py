@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import shutil
 from typing import Any
 
 from ...compdb import CompileDatabase
 from ...config import AgentConfig
 from ...policy import CommandPolicy
-from ...rebuild import default_compdb_path, extract_targets, rebuild_target
+from ...rebuild import RebuildTarget, default_compdb_path, extract_targets, rebuild_target
 from .workflow import triage_binary_crash, verify_binary_execution
 
 PATCH_CANDIDATE_SCHEMA = "pwn-agent.binary-patch-candidate.v1"
@@ -37,6 +38,7 @@ def patch_validate(
     output_name: str = "patched-target",
     timeout_seconds: int | None = None,
     config: AgentConfig | None = None,
+    cleanup_on_success: bool = False,
 ) -> dict[str, Any]:
     resolved_root = root.resolve()
     cfg = config or AgentConfig()
@@ -56,9 +58,11 @@ def patch_validate(
     if not patch_metadata.get("summary"):
         patch_metadata["summary"] = "bounded local patch validation"
 
-    edit_results = _apply_edits(resolved_root, edits)
+    scratch_root, workspace_root = _create_patch_workspace(resolved_root, patch_metadata["patch_id"])
+    edit_results = _apply_edits(workspace_root, edits)
     build_result, patched_binary = _materialize_patched_binary(
-        resolved_root,
+        original_root=resolved_root,
+        workspace_root=workspace_root,
         build=build,
         binary=binary,
         analysis=analysis,
@@ -98,6 +102,7 @@ def patch_validate(
     if patched_binary is not None and build_result.get("status") != "failed":
         launch_spec = _resolve_validation_spec("launch", validation.get("launch"), fallback=validation.get("baseline"))
         launch_result, launch_evidence = _run_launch_validation(
+            workspace_root,
             resolved_root,
             patched_binary,
             spec=launch_spec,
@@ -109,6 +114,7 @@ def patch_validate(
         baseline_spec = _resolve_baseline_spec(validation.get("baseline"), analysis=analysis)
         if baseline_spec is not None:
             baseline_result, baseline_evidence = _run_launch_validation(
+                workspace_root,
                 resolved_root,
                 patched_binary,
                 spec=baseline_spec,
@@ -122,6 +128,7 @@ def patch_validate(
         regression_spec = _resolve_regression_spec(validation.get("regression"), crash=crash)
         if regression_spec is not None:
             regression_result, regression_evidence = _run_regression_validation(
+                workspace_root,
                 resolved_root,
                 patched_binary,
                 spec=regression_spec,
@@ -141,6 +148,10 @@ def patch_validate(
         regression_notes.append("Build or binary materialization failed before validation could run.")
 
     remaining_risk_summary = _build_remaining_risk_summary(validation_result, regression_notes)
+    cleanup_performed = False
+    if cleanup_on_success and validation_result.get("overall_status") == "passed":
+        shutil.rmtree(scratch_root, ignore_errors=False)
+        cleanup_performed = True
     return {
         "schema": PATCH_VALIDATION_SCHEMA,
         "schema_version": 1,
@@ -148,8 +159,16 @@ def patch_validate(
         "mode": "binary",
         "target": {
             "root": str(resolved_root),
+            "isolated_workspace_path": str(workspace_root),
             "binary_path": str(patched_binary) if patched_binary is not None else None,
             "original_binary_path": _resolve_original_binary_path(binary, analysis=analysis, crash=crash),
+        },
+        "workspace": {
+            "original_root": str(resolved_root),
+            "isolated_workspace_path": str(workspace_root),
+            "cleanup_requested": cleanup_on_success,
+            "cleanup_performed": cleanup_performed,
+            "cleanup_policy": "keep-on-failure, optionally remove-on-success",
         },
         "patch_metadata": patch_metadata,
         "apply_result": {
@@ -175,9 +194,12 @@ def render_patch_validation_markdown(artifact: dict[str, Any]) -> str:
     lines.append(f"- Patch id: `{patch_metadata.get('patch_id')}`")
     lines.append(f"- Summary: {patch_metadata.get('summary')}")
     lines.append(f"- Patched binary: `{target.get('binary_path')}`")
+    lines.append(f"- Isolated workspace: `{target.get('isolated_workspace_path')}`")
     lines.append(f"- Overall validation: {validation_result.get('overall_status')}")
     lines.append(f"- Remaining risk: {risk.get('level')} :: {risk.get('summary')}")
     lines.append(f"- Applied edits: {len(apply_result.get('edits_applied') or [])}")
+    workspace = dict(artifact.get("workspace") or {})
+    lines.append(f"- Cleanup performed: {str(workspace.get('cleanup_performed')).lower()}")
 
     build = dict(apply_result.get("build") or {})
     lines.append(f"- Build status: {build.get('status')}")
@@ -252,8 +274,9 @@ def _apply_edits(root: Path, edits: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _materialize_patched_binary(
-    root: Path,
     *,
+    original_root: Path,
+    workspace_root: Path,
     build: dict[str, Any],
     binary: Path | None,
     analysis: dict[str, Any] | None,
@@ -268,7 +291,7 @@ def _materialize_patched_binary(
         candidate = _resolve_original_binary_path(binary, analysis=analysis, crash=crash) or build.get("binary_path")
         if not candidate:
             raise ValueError("existing-binary patch validation requires a binary path")
-        resolved_binary = _resolve_bound_path(root, candidate)
+        resolved_binary = _resolve_workspace_path(workspace_root, candidate, original_root=original_root)
         return (
             {
                 "attempted": False,
@@ -285,17 +308,21 @@ def _materialize_patched_binary(
     if build_kind != "rebuild-target":
         raise ValueError(f"unsupported build kind: {build_kind}")
 
-    compdb_path = _resolve_bound_path(root, build.get("compdb_path", str(default_compdb_path(root))))
+    compdb_path = _resolve_workspace_path(
+        workspace_root,
+        build.get("compdb_path", str(default_compdb_path(original_root))),
+        original_root=original_root,
+    )
     db = CompileDatabase.load(compdb_path)
-    targets = extract_targets(db)
+    targets = [_rebase_rebuild_target(target, original_root=original_root, workspace_root=workspace_root) for target in extract_targets(db)]
     selected_index = int(build.get("target_index", target_index))
     selected_output_name = str(build.get("output_name") or output_name)
     if selected_index < 1 or selected_index > len(targets):
         raise IndexError(f"target index out of range: {selected_index}")
 
-    policy = CommandPolicy(root, allowlist=config.allowlist, timeout_seconds=timeout_seconds)
+    policy = CommandPolicy(workspace_root, allowlist=config.allowlist, timeout_seconds=timeout_seconds)
     rebuild = rebuild_target(policy, targets[selected_index - 1], selected_output_name)
-    output_binary = (root / selected_output_name).resolve()
+    output_binary = (workspace_root / selected_output_name).resolve()
     return (
         {
             "attempted": True,
@@ -312,7 +339,8 @@ def _materialize_patched_binary(
 
 
 def _run_launch_validation(
-    root: Path,
+    workspace_root: Path,
+    original_root: Path,
     binary: Path,
     *,
     spec: dict[str, Any] | None,
@@ -320,10 +348,10 @@ def _run_launch_validation(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = dict(spec or {})
     args = list(normalized.get("args") or [])
-    stdin_file = _materialize_stdin_file(root, normalized, label="baseline")
+    stdin_file = _materialize_stdin_file(workspace_root, normalized, label="baseline", original_root=original_root)
     expected_returncode = int(normalized.get("expected_returncode", 0))
     returncode, artifact = verify_binary_execution(
-        root=root,
+        root=workspace_root,
         binary=binary,
         args=args,
         stdin_file=stdin_file,
@@ -353,7 +381,8 @@ def _run_launch_validation(
 
 
 def _run_regression_validation(
-    root: Path,
+    workspace_root: Path,
+    original_root: Path,
     binary: Path,
     *,
     spec: dict[str, Any],
@@ -379,9 +408,9 @@ def _run_regression_validation(
         return result, evidence
 
     args = list(normalized.get("args") or [])
-    stdin_file = _materialize_stdin_file(root, normalized, label="regression")
+    stdin_file = _materialize_stdin_file(workspace_root, normalized, label="regression", original_root=original_root)
     artifact = triage_binary_crash(
-        root=root,
+        root=workspace_root,
         binary=binary,
         stdin_file=stdin_file,
         stdin_text=(normalized.get("stdin_text") if stdin_file is None else None),
@@ -520,14 +549,29 @@ def _resolve_bound_path(root: Path, raw_path: str) -> Path:
     return resolved
 
 
-def _materialize_stdin_file(root: Path, spec: dict[str, Any], *, label: str) -> Path | None:
+def _resolve_workspace_path(workspace_root: Path, raw_path: str, *, original_root: Path) -> Path:
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        if original_root in resolved.parents or resolved == original_root:
+            rebased = (workspace_root / resolved.relative_to(original_root)).resolve()
+            if workspace_root not in rebased.parents and rebased != workspace_root:
+                raise ValueError(f"path escapes isolated workspace: {rebased}")
+            return rebased
+        if workspace_root in resolved.parents or resolved == workspace_root:
+            return resolved
+        raise ValueError(f"path escapes isolated workspace: {resolved}")
+    return _resolve_bound_path(workspace_root, str(candidate))
+
+
+def _materialize_stdin_file(workspace_root: Path, spec: dict[str, Any], *, label: str, original_root: Path) -> Path | None:
     stdin_file_path = spec.get("stdin_file_path")
     if stdin_file_path:
-        return _resolve_bound_path(root, str(stdin_file_path))
+        return _resolve_workspace_path(workspace_root, str(stdin_file_path), original_root=original_root)
     stdin_text = spec.get("stdin_text")
     if stdin_text is None:
         return None
-    scratch_dir = root / ".pwn-agent" / "validation-inputs"
+    scratch_dir = workspace_root / ".pwn-agent" / "validation-inputs"
     scratch_dir.mkdir(parents=True, exist_ok=True)
     path = scratch_dir / f"{label}.txt"
     path.write_text(str(stdin_text), encoding="utf-8")
@@ -536,3 +580,63 @@ def _materialize_stdin_file(root: Path, spec: dict[str, Any], *, label: str) -> 
 
 def _head_lines(text: str, *, limit: int = 20) -> list[str]:
     return text.splitlines()[:limit] if text else []
+
+
+def _create_patch_workspace(original_root: Path, patch_id: str) -> tuple[Path, Path]:
+    base = original_root / ".pwn-agent" / "patch-workspaces"
+    base.mkdir(parents=True, exist_ok=True)
+    safe_patch_id = _sanitize_patch_id(patch_id)
+    index = 1
+    while True:
+        scratch_root = base / f"{safe_patch_id}-{index:03d}"
+        workspace_root = scratch_root / "workspace"
+        if not scratch_root.exists():
+            break
+        index += 1
+    shutil.copytree(original_root, workspace_root, ignore=_build_copy_ignore(original_root))
+    return scratch_root, workspace_root
+
+
+def _build_copy_ignore(original_root: Path):
+    patch_workspace_dir = (original_root / ".pwn-agent").resolve()
+
+    def _ignore(current_dir: str, names: list[str]) -> list[str]:
+        current = Path(current_dir).resolve()
+        if current == patch_workspace_dir and "patch-workspaces" in names:
+            return ["patch-workspaces"]
+        return []
+
+    return _ignore
+
+
+def _sanitize_patch_id(raw_patch_id: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in raw_patch_id).strip("-")
+    return cleaned or "patch"
+
+
+def _rebase_rebuild_target(target: RebuildTarget, *, original_root: Path, workspace_root: Path) -> RebuildTarget:
+    return RebuildTarget(
+        source_file=_rebase_path_string(target.source_file, original_root=original_root, workspace_root=workspace_root),
+        directory=_rebase_path_string(target.directory, original_root=original_root, workspace_root=workspace_root),
+        compiler_argv=[_rebase_compiler_token(token, original_root=original_root, workspace_root=workspace_root) for token in target.compiler_argv],
+    )
+
+
+def _rebase_compiler_token(token: str, *, original_root: Path, workspace_root: Path) -> str:
+    for prefix in ["-I", "-isystem", "-iquote", "-include", "-o"]:
+        if token.startswith(prefix) and token != prefix:
+            suffix = token[len(prefix) :]
+            rebased_suffix = _rebase_path_string(suffix, original_root=original_root, workspace_root=workspace_root)
+            if rebased_suffix != suffix:
+                return prefix + rebased_suffix
+    return _rebase_path_string(token, original_root=original_root, workspace_root=workspace_root)
+
+
+def _rebase_path_string(raw: str, *, original_root: Path, workspace_root: Path) -> str:
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        return raw
+    resolved = candidate.resolve()
+    if original_root not in resolved.parents and resolved != original_root:
+        return raw
+    return str((workspace_root / resolved.relative_to(original_root)).resolve())

@@ -5,8 +5,16 @@
   "mode": "binary",
   "target": {
     "root": "/workspace/demo",
-    "binary_path": "/workspace/demo/demo_patched",
+    "isolated_workspace_path": "/workspace/demo/.pwn-agent/patch-workspaces/guard-copy-001/workspace",
+    "binary_path": "/workspace/demo/.pwn-agent/patch-workspaces/guard-copy-001/workspace/demo_patched",
     "original_binary_path": "/workspace/demo/demo"
+  },
+  "workspace": {
+    "original_root": "/workspace/demo",
+    "isolated_workspace_path": "/workspace/demo/.pwn-agent/patch-workspaces/guard-copy-001/workspace",
+    "cleanup_requested": false,
+    "cleanup_performed": false,
+    "cleanup_policy": "keep-on-failure, optionally remove-on-success"
   },
   "patch_metadata": {
     "patch_id": "guard-copy",
@@ -34,13 +42,13 @@
         "-o",
         "demo_patched"
       ],
-      "output_binary": "/workspace/demo/demo_patched",
+      "output_binary": "/workspace/demo/.pwn-agent/patch-workspaces/guard-copy-001/workspace/demo_patched",
       "stdout_head": [
         "rebuilt"
       ],
       "stderr_head": []
     },
-    "patched_binary_path": "/workspace/demo/demo_patched"
+    "patched_binary_path": "/workspace/demo/.pwn-agent/patch-workspaces/guard-copy-001/workspace/demo_patched"
   },
   "validation_result": {
     "overall_status": "passed",

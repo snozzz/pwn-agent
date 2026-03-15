@@ -117,6 +117,11 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     patch_validate_parser.add_argument("--report", type=Path, help="optional markdown patch validation report")
     patch_validate_parser.add_argument("--timeout", type=int, help="optional timeout override in seconds")
     patch_validate_parser.add_argument("--config", type=Path, help="optional JSON config path")
+    patch_validate_parser.add_argument(
+        "--cleanup-on-success",
+        action="store_true",
+        help="remove the isolated patch workspace after a successful validation run",
+    )
 
     crash_triage = subparsers.add_parser("crash-triage", help="run bounded crash triage for a local binary")
     crash_triage.add_argument("--root", type=Path, required=True, help="workspace root")
@@ -284,6 +289,7 @@ def handle_command(args: argparse.Namespace) -> int | None:
             output_name=args.output_name,
             timeout_seconds=args.timeout,
             config=config,
+            cleanup_on_success=args.cleanup_on_success,
         )
         write_binary_json(args.output, artifact)
         if args.report:

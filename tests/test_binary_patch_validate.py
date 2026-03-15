@@ -15,7 +15,7 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 class BinaryPatchValidateTests(unittest.TestCase):
-    def test_patch_validate_applies_structured_patch_and_runs_bounded_checks(self) -> None:
+    def test_patch_validate_uses_isolated_workspace_and_preserves_original_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_dir = root / "src"
@@ -36,32 +36,48 @@ class BinaryPatchValidateTests(unittest.TestCase):
             )
 
             patch_payload = load_patch_input(FIXTURE_DIR / "patch_script_replace_text.json")
+            rebuild_roots: list[str] = []
+            verify_roots: list[str] = []
+            triage_roots: list[str] = []
 
             def _rebuild(_policy, _target, output_name):
-                output_binary = root / output_name
+                rebuild_roots.append(str(_policy.workspace_root))
+                output_binary = _policy.workspace_root / output_name
                 output_binary.write_bytes(b"\x7fELF" + b"A" * 32)
                 return CommandResult(argv=["cc", "src/demo.c", "-o", output_name], returncode=0, stdout="rebuilt\n", stderr="")
+
+            def _verify(*, root, binary, **_kwargs):
+                verify_roots.append(str(root))
+                self.assertIn(".pwn-agent/patch-workspaces", str(root))
+                self.assertTrue(str(binary).startswith(str(root)))
+                return (0, {"sanitizer_signal": False, "stdout_head": ["ok"], "stderr_head": []})
+
+            def _triage(*, root, binary, **_kwargs):
+                triage_roots.append(str(root))
+                self.assertIn(".pwn-agent/patch-workspaces", str(root))
+                self.assertTrue(str(binary).startswith(str(root)))
+                return {
+                    "crash_summary": {
+                        "suspicious": False,
+                        "reason": "clean-exit",
+                        "signal_name": None,
+                        "exit_code": 0,
+                    },
+                    "execution_result": {
+                        "exit_code": 0,
+                        "stdout_head": ["ok"],
+                        "stderr_head": [],
+                    },
+                }
 
             with patch("src.modes.binary.patching.rebuild_target", side_effect=_rebuild):
                 with patch(
                     "src.modes.binary.patching.verify_binary_execution",
-                    return_value=(0, {"sanitizer_signal": False, "stdout_head": ["ok"], "stderr_head": []}),
+                    side_effect=_verify,
                 ) as verify_mock:
                     with patch(
                         "src.modes.binary.patching.triage_binary_crash",
-                        return_value={
-                            "crash_summary": {
-                                "suspicious": False,
-                                "reason": "clean-exit",
-                                "signal_name": None,
-                                "exit_code": 0,
-                            },
-                            "execution_result": {
-                                "exit_code": 0,
-                                "stdout_head": ["ok"],
-                                "stderr_head": [],
-                            },
-                        },
+                        side_effect=_triage,
                     ) as triage_mock:
                         artifact = patch_validate(
                             root=root,
@@ -70,14 +86,22 @@ class BinaryPatchValidateTests(unittest.TestCase):
                             config=AgentConfig(),
                         )
 
+            isolated_workspace = Path(artifact["workspace"]["isolated_workspace_path"])
+            isolated_source = isolated_workspace / "src" / "demo.c"
+
             self.assertEqual(artifact["schema"], PATCH_VALIDATION_SCHEMA)
-            self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", source_file.read_text(encoding="utf-8"))
+            self.assertIn("strcpy(buf, input);", source_file.read_text(encoding="utf-8"))
+            self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", isolated_source.read_text(encoding="utf-8"))
             self.assertEqual(artifact["apply_result"]["build"]["status"], "ok")
             self.assertEqual(artifact["validation_result"]["overall_status"], "passed")
             self.assertEqual(artifact["remaining_risk_summary"]["level"], "low")
             self.assertIn("no longer reproduces suspicious behavior", artifact["regression_notes"][0])
             self.assertEqual(verify_mock.call_count, 2)
             triage_mock.assert_called_once()
+            self.assertTrue(all(".pwn-agent/patch-workspaces" in item for item in rebuild_roots))
+            self.assertEqual(rebuild_roots, verify_roots[:1])
+            self.assertEqual(rebuild_roots, triage_roots)
+            self.assertFalse(artifact["workspace"]["cleanup_performed"])
 
     def test_patch_validate_supports_existing_binary_without_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,7 +139,7 @@ class BinaryPatchValidateTests(unittest.TestCase):
                 )
 
             self.assertEqual(artifact["apply_result"]["build"]["status"], "skipped")
-            self.assertEqual(artifact["target"]["binary_path"], str(binary))
+            self.assertIn(".pwn-agent/patch-workspaces", artifact["target"]["binary_path"])
             self.assertEqual(artifact["validation_result"]["overall_status"], "partial")
             self.assertEqual(artifact["remaining_risk_summary"]["level"], "medium")
 
@@ -150,10 +174,136 @@ class BinaryPatchValidateTests(unittest.TestCase):
                     config=AgentConfig(),
                 )
 
+            self.assertIn("strcpy(buf, input);", (source_dir / "demo.c").read_text(encoding="utf-8"))
             self.assertEqual(artifact["apply_result"]["build"]["status"], "failed")
             self.assertEqual(artifact["validation_result"]["overall_status"], "failed")
             self.assertEqual(artifact["remaining_risk_summary"]["level"], "high")
             self.assertIn("Build or binary materialization failed", artifact["regression_notes"][0])
+
+    def test_patch_validate_repeated_runs_do_not_accumulate_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            source_file = source_dir / "demo.c"
+            source_file.write_text("int main(void) { strcpy(buf, input); return 0; }\n", encoding="utf-8")
+            (root / "compile_commands.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "directory": str(root),
+                            "file": "src/demo.c",
+                            "command": "cc src/demo.c -o demo_patched",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            patch_payload = load_patch_input(FIXTURE_DIR / "patch_script_replace_text.json")
+
+            def _rebuild(_policy, _target, output_name):
+                output_binary = _policy.workspace_root / output_name
+                output_binary.write_bytes(b"\x7fELF" + b"A" * 32)
+                return CommandResult(argv=["cc"], returncode=0, stdout="rebuilt\n", stderr="")
+
+            with patch("src.modes.binary.patching.rebuild_target", side_effect=_rebuild):
+                with patch(
+                    "src.modes.binary.patching.verify_binary_execution",
+                    return_value=(0, {"sanitizer_signal": False, "stdout_head": ["ok"], "stderr_head": []}),
+                ):
+                    with patch(
+                        "src.modes.binary.patching.triage_binary_crash",
+                        return_value={
+                            "crash_summary": {"suspicious": False, "reason": "clean-exit", "signal_name": None, "exit_code": 0},
+                            "execution_result": {"exit_code": 0, "stdout_head": ["ok"], "stderr_head": []},
+                        },
+                    ):
+                        first = patch_validate(root=root, patch_payload=patch_payload, config=AgentConfig())
+                        second = patch_validate(root=root, patch_payload=patch_payload, config=AgentConfig())
+
+            self.assertIn("strcpy(buf, input);", source_file.read_text(encoding="utf-8"))
+            self.assertNotEqual(first["workspace"]["isolated_workspace_path"], second["workspace"]["isolated_workspace_path"])
+            first_source = Path(first["workspace"]["isolated_workspace_path"]) / "src" / "demo.c"
+            second_source = Path(second["workspace"]["isolated_workspace_path"]) / "src" / "demo.c"
+            self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", first_source.read_text(encoding="utf-8"))
+            self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", second_source.read_text(encoding="utf-8"))
+
+    def test_patch_validate_can_cleanup_workspace_on_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            (source_dir / "demo.c").write_text("int main(void) { strcpy(buf, input); return 0; }\n", encoding="utf-8")
+            (root / "compile_commands.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "directory": str(root),
+                            "file": "src/demo.c",
+                            "command": "cc src/demo.c -o demo_patched",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            patch_payload = load_patch_input(FIXTURE_DIR / "patch_script_replace_text.json")
+
+            def _rebuild(_policy, _target, output_name):
+                output_binary = _policy.workspace_root / output_name
+                output_binary.write_bytes(b"\x7fELF" + b"A" * 32)
+                return CommandResult(argv=["cc"], returncode=0, stdout="rebuilt\n", stderr="")
+
+            with patch("src.modes.binary.patching.rebuild_target", side_effect=_rebuild):
+                with patch(
+                    "src.modes.binary.patching.verify_binary_execution",
+                    return_value=(0, {"sanitizer_signal": False, "stdout_head": ["ok"], "stderr_head": []}),
+                ):
+                    with patch(
+                        "src.modes.binary.patching.triage_binary_crash",
+                        return_value={
+                            "crash_summary": {"suspicious": False, "reason": "clean-exit", "signal_name": None, "exit_code": 0},
+                            "execution_result": {"exit_code": 0, "stdout_head": ["ok"], "stderr_head": []},
+                        },
+                    ):
+                        artifact = patch_validate(
+                            root=root,
+                            patch_payload=patch_payload,
+                            config=AgentConfig(),
+                            cleanup_on_success=True,
+                        )
+
+            self.assertTrue(artifact["workspace"]["cleanup_performed"])
+            self.assertFalse(Path(artifact["workspace"]["isolated_workspace_path"]).exists())
+
+    def test_patch_validate_edit_failure_does_not_mutate_original_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            source_file = source_dir / "demo.c"
+            source_file.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            (root / "demo.bin").write_bytes(b"\x7fELF" + b"A" * 32)
+            patch_payload = {
+                "schema": "pwn-agent.patch-script.v1",
+                "patch_metadata": {"patch_id": "bad-edit"},
+                "edits": [
+                    {
+                        "op": "replace_text",
+                        "path": "src/demo.c",
+                        "old": "missing();",
+                        "new": "patched();",
+                    }
+                ],
+                "build": {
+                    "kind": "existing-binary",
+                    "binary_path": str(root / "demo.bin"),
+                },
+            }
+
+            with self.assertRaises(ValueError):
+                patch_validate(root=root, patch_payload=patch_payload, config=AgentConfig())
+
+            self.assertEqual(source_file.read_text(encoding="utf-8"), "int main(void) { return 0; }\n")
 
     def test_patch_validate_rejects_root_escape_in_edit_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

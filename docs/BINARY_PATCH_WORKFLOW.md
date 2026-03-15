@@ -4,7 +4,7 @@
 
 ## Scope
 
-The workflow accepts a structured patch artifact or structured patch script, applies bounded local edits, optionally rebuilds a workspace-local target, and then runs explicit validation checks against the patched binary.
+The workflow accepts a structured patch artifact or structured patch script, creates an isolated scratch workspace under `.pwn-agent/patch-workspaces/<patch-id-or-run-id>/workspace`, applies bounded local edits only there, optionally rebuilds there, and then runs explicit validation checks against the patched binary in that scratch workspace.
 
 It does not generate patches from free-form model output. It defines the interface that future model-generated patches must satisfy.
 
@@ -46,6 +46,7 @@ Top-level fields:
 - `artifact_type`
 - `mode`
 - `target`
+- `workspace`
 - `patch_metadata`
 - `apply_result`
 - `validation_result`
@@ -67,12 +68,30 @@ The workflow reuses existing primitives:
 - `binary-verify` for launch/baseline execution checks
 - `crash-triage` for regression replay checks
 
+## Workspace Lifecycle
+
+Patch validation is isolated from the original workspace tree:
+
+1. copy the current workspace into `.pwn-agent/patch-workspaces/<run-id>/workspace`
+2. apply structured edits only inside that scratch copy
+3. rebuild and validate against the scratch copy
+4. record both the original root and isolated workspace path in the output artifact
+
+Cleanup policy:
+
+- failed validations keep the scratch workspace by default
+- successful validations also keep the scratch workspace by default
+- `--cleanup-on-success` removes the scratch workspace after a successful run
+
+This keeps the original workspace reproducible across repeated validation attempts.
+
 ## Safety Model
 
 - no shell passthrough
 - no arbitrary patch code execution
 - workspace-bound file edits only
 - workspace-bound binaries only
+- original workspace tree is not mutated by patch application
 - rebuilds go through the existing bounded command policy
 - validation runs reuse the existing bounded binary execution primitives
 

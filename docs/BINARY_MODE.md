@@ -55,6 +55,8 @@ Current command mapping:
 - clean verify results suppress redundant replay/verify actions
 - failing verify results produce bounded follow-up triage actions
 
+`patch-validate` now uses isolated scratch workspaces under `.pwn-agent/patch-workspaces/...` so the original workspace tree is not mutated during validation.
+
 `binary-scan` evidence collection is bounded to local tools:
 
 - `file`
