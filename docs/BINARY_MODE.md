@@ -17,12 +17,13 @@ Binary mode emits separate artifacts from source-audit outputs:
 
 - `pwn-agent.binary-analysis.v1` from `binary-scan`
 - `pwn-agent.binary-crash-triage.v1` from `crash-triage` / `binary-triage`
-- `pwn-agent.binary-plan.v1` from `binary-plan`
+- `pwn-agent.binary-plan.v2` from `binary-plan`
 - `pwn-agent.binary-verify.v1` from `binary-verify`
 - `binary-run` uses the bounded plan executor and writes an execution summary for plan progress
 
 These schemas are intentionally separate from `audit.json` to avoid conflating source-level and binary-level evidence.
 See [BINARY_AUDIT_EXAMPLE.json](/home/snoz/pwn-agent/docs/BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
+See [BINARY_PLANNER.md](/home/snoz/pwn-agent/docs/BINARY_PLANNER.md) for the planner schema and migration notes.
 
 ## Supported stages
 
@@ -30,17 +31,18 @@ Binary mode tracks this stage sequence:
 
 1. `identify`
 2. `inspect`
-3. `triage`
-4. `validate`
+3. `reproduce`
+4. `triage`
 5. `patch`
-6. `revalidate`
+6. `validate`
+7. `summarize`
 
 Current command mapping:
 
-- `binary-scan` covers `identify` + `inspect` + `triage`
-- `crash-triage` / `binary-triage` covers bounded local execution plus optional debugger-backed crash triage
+- `binary-scan` covers `identify` + `inspect`
+- `crash-triage` / `binary-triage` covers `reproduce` + `triage` through bounded local execution plus optional debugger-backed crash triage
 - `binary-plan` emits stage-aware next actions
-- `binary-run` executes bounded ready actions (for example `binary-verify`)
+- `binary-run` executes bounded ready actions while preferring earlier investigation stages before later patch/summary stages
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
 
 `binary-scan` evidence collection is bounded to local tools:
@@ -66,6 +68,13 @@ Crash triage artifacts normalize into these top-level sections:
 - `crash_summary`: normalized suspicion/crash reason for planner use
 - `debugger_summary`: bounded batch debugger results when attempted
 - `evidence`: normalized direct-run and debugger evidence entries with truncation metadata
+
+Binary plan artifacts normalize into these top-level sections:
+
+- `source_artifacts`: which binary evidence schemas were used as planner input
+- `stage_order`: deterministic binary workflow ordering
+- `readiness`: counts of runnable, blocked, and context actions
+- `next_actions`: staged actions with rationale, dependency edges, expected artifacts, and bounded `suggested_cli`
 
 ## Safety and bounded execution
 

@@ -8,7 +8,7 @@ from ...executor import execute_plan, render_execution_markdown, write_execution
 from ...reporting import write_report
 from .workflow import (
     build_binary_plan,
-    load_binary_analysis,
+    load_binary_artifact,
     render_binary_audit_markdown,
     render_binary_plan_markdown,
     scan_binary,
@@ -42,7 +42,8 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     binary_scan.add_argument("--config", type=Path, help="optional JSON config path")
 
     binary_plan = subparsers.add_parser("binary-plan", help="build a binary workflow plan from a binary analysis artifact")
-    binary_plan.add_argument("--analysis-json", type=Path, required=True, help="input binary analysis json")
+    binary_plan.add_argument("--analysis-json", type=Path, help="input binary analysis json")
+    binary_plan.add_argument("--crash-json", type=Path, help="optional binary crash triage json")
     binary_plan.add_argument("--output", type=Path, required=True, help="output binary plan json")
     binary_plan.add_argument("--report", type=Path, help="optional markdown plan report")
 
@@ -143,8 +144,11 @@ def handle_command(args: argparse.Namespace) -> int | None:
         return 0
 
     if args.command == "binary-plan":
-        analysis = load_binary_analysis(args.analysis_json)
-        plan = build_binary_plan(analysis)
+        if args.analysis_json is None and args.crash_json is None:
+            raise ValueError("binary-plan requires --analysis-json, --crash-json, or both")
+        analysis = load_binary_artifact(args.analysis_json) if args.analysis_json is not None else None
+        crash = load_binary_artifact(args.crash_json) if args.crash_json is not None else None
+        plan = build_binary_plan(analysis, crash=crash)
         write_binary_json(args.output, plan)
         if args.report:
             write_report(args.report, render_binary_plan_markdown(plan))

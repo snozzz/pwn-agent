@@ -607,7 +607,7 @@ def _select_actions(
     indexed = {action.get("id"): action for action in runnable if action.get("id")}
     ordered = sorted(
         runnable,
-        key=lambda item: (_phase_rank(item.get("phase")), int(item.get("priority", 0)), item.get("id", "")),
+        key=lambda item: (_action_order_rank(item), int(item.get("priority", 0)), item.get("id", "")),
         reverse=True,
     )
     selected: list[dict[str, Any]] = []
@@ -655,7 +655,7 @@ def _select_followup_actions(
     indexed = {action.get("id"): action for action in remaining if action.get("id")}
     ordered = sorted(
         remaining,
-        key=lambda item: (_phase_rank(item.get("phase")), int(item.get("priority", 0)), item.get("id", "")),
+        key=lambda item: (_action_order_rank(item), int(item.get("priority", 0)), item.get("id", "")),
         reverse=True,
     )
     selected: list[str] = []
@@ -720,11 +720,13 @@ def _resolve_plan_root(plan: dict[str, Any], *, actions: list[dict[str, Any]]) -
 def _action_signature(action: dict[str, Any]) -> str:
     payload = {
         "kind": action.get("kind"),
+        "stage": action.get("stage"),
         "phase": action.get("phase"),
         "status": action.get("status"),
         "priority": action.get("priority"),
         "depends_on": list(action.get("depends_on") or []),
         "blocked_by": list(action.get("blocked_by") or []),
+        "expected_artifacts": list(action.get("expected_artifacts") or []),
         "suggested_cli": list(action.get("suggested_cli") or []),
         "params": action.get("params") or {},
     }
@@ -739,6 +741,28 @@ def _phase_rank(phase: str | None) -> int:
         "synthesis": 3,
     }
     return order.get(phase or "execution", 0)
+
+
+def _stage_rank(stage: str | None) -> int | None:
+    if stage is None:
+        return None
+    order = {
+        "identify": 1,
+        "inspect": 2,
+        "reproduce": 3,
+        "triage": 4,
+        "patch": 5,
+        "validate": 6,
+        "summarize": 7,
+    }
+    return order.get(stage)
+
+
+def _action_order_rank(action: dict[str, Any]) -> int:
+    stage_rank = _stage_rank(action.get("stage"))
+    if stage_rank is not None:
+        return 1000 - stage_rank
+    return _phase_rank(action.get("phase"))
 
 
 def _validate_suggested_cli(action: dict[str, Any], *, expected_root: Path | None) -> list[str]:

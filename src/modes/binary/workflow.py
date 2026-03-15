@@ -15,9 +15,9 @@ from ...policy import CommandPolicy, CommandResult, PolicyError
 
 ANALYSIS_SCHEMA = "pwn-agent.binary-analysis.v1"
 TRIAGE_SCHEMA = "pwn-agent.binary-crash-triage.v1"
-PLAN_SCHEMA = "pwn-agent.binary-plan.v1"
+PLAN_SCHEMA = "pwn-agent.binary-plan.v2"
 VERIFY_SCHEMA = "pwn-agent.binary-verify.v1"
-STAGE_ORDER = ["identify", "inspect", "triage", "validate", "patch", "revalidate"]
+STAGE_ORDER = ["identify", "inspect", "reproduce", "triage", "patch", "validate", "summarize"]
 
 _TOOL_SPECS = [
     {"id": "file", "tool": "file", "build_argv": lambda binary: ["file", str(binary)], "stdout_lines": 80, "stdout_chars": 12000},
@@ -104,6 +104,13 @@ def load_binary_analysis(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema") != ANALYSIS_SCHEMA:
         raise ValueError(f"unsupported binary analysis schema: {payload.get('schema')}")
+    return payload
+
+
+def load_binary_artifact(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") not in {ANALYSIS_SCHEMA, TRIAGE_SCHEMA, VERIFY_SCHEMA}:
+        raise ValueError(f"unsupported binary artifact schema: {payload.get('schema')}")
     return payload
 
 
@@ -280,20 +287,323 @@ def render_binary_triage_markdown(artifact: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
-    root = str(analysis.get("root") or analysis.get("target", {}).get("root") or "")
-    binary_path = str(analysis.get("binary_path") or analysis.get("target", {}).get("binary_path") or "")
-    inputs = dict(analysis.get("inputs") or {})
-    runtime_hints = dict(analysis.get("runtime_hints") or {})
+def build_binary_plan(
+    analysis: dict[str, Any] | None = None,
+    *,
+    crash: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if analysis is None and crash is None:
+        raise ValueError("binary plan requires at least one artifact")
 
-    stdin_file_path = (
-        runtime_hints.get("stdin_file_path")
-        or inputs.get("stdin_file_path")
-        or inputs.get("stdin_sample_path")
+    root = _resolve_binary_root(analysis, crash)
+    binary_path = _resolve_binary_path(analysis, crash)
+    stdin_file_path, runtime_args = _extract_runtime_hints(analysis, crash)
+    patch_candidate = _extract_patch_candidate(analysis, crash)
+    analysis_has_mitigations = _analysis_has_mitigations(analysis)
+    crash_suspicious = bool(crash and dict(crash.get("crash_summary") or {}).get("suspicious"))
+    debugger_collected = bool(crash and dict(crash.get("debugger_summary") or {}).get("collected"))
+    validation_present = bool(_extract_validation_result(analysis, crash))
+
+    actions: list[dict[str, Any]] = []
+    if not analysis_has_mitigations:
+        actions.append(
+            _binary_plan_action(
+                action_id="collect-binary-evidence",
+                stage="identify",
+                kind="binary_scan",
+                status="ready",
+                priority=100,
+                rationale="binary evidence is missing or does not include a mitigations summary yet",
+                expected_artifacts=["binary-analysis.json"],
+                suggested_cli=_build_binary_scan_cli(root, binary_path, stdin_file_path=stdin_file_path, runtime_args=runtime_args),
+            )
+        )
+    else:
+        actions.append(
+            _binary_plan_action(
+                action_id="review-binary-evidence",
+                stage="inspect",
+                kind="review_binary_evidence",
+                status="context",
+                priority=95,
+                rationale="binary metadata, mitigations, imports, and strings are available for review",
+                expected_artifacts=[],
+                suggested_cli=[],
+            )
+        )
+
+    if crash is None:
+        actions.append(
+            _binary_plan_action(
+                action_id="reproduce-target-behavior",
+                stage="reproduce",
+                kind="crash_triage",
+                status="ready",
+                priority=90,
+                rationale="no crash reproduction artifact is present yet",
+                expected_artifacts=["binary-crash-triage.json"],
+                suggested_cli=_build_crash_triage_cli(
+                    root,
+                    binary_path,
+                    stdin_file_path=stdin_file_path,
+                    runtime_args=runtime_args,
+                    gdb_batch=False,
+                ),
+            )
+        )
+    elif crash_suspicious and not debugger_collected:
+        actions.append(
+            _binary_plan_action(
+                action_id="collect-debugger-context",
+                stage="triage",
+                kind="crash_triage_gdb",
+                status="ready",
+                priority=92,
+                rationale="the crash artifact is suspicious but does not include bounded debugger context",
+                expected_artifacts=["binary-crash-triage-gdb.json"],
+                suggested_cli=_build_crash_triage_cli(
+                    root,
+                    binary_path,
+                    stdin_file_path=stdin_file_path,
+                    runtime_args=runtime_args,
+                    gdb_batch=True,
+                ),
+            )
+        )
+
+    if crash_suspicious:
+        patch_status = "context" if patch_candidate is None else "context"
+        actions.append(
+            _binary_plan_action(
+                action_id="draft-patch-hypothesis",
+                stage="patch",
+                kind="patch_hypothesis",
+                status=patch_status,
+                priority=80,
+                rationale="a suspicious crash should be reduced to a concrete local patch hypothesis before validation",
+                expected_artifacts=["patch-notes.md"],
+                suggested_cli=[],
+            )
+        )
+
+    if patch_candidate is not None and not validation_present:
+        actions.append(
+            _binary_plan_action(
+                action_id="validate-candidate-patch",
+                stage="validate",
+                kind="binary_verify",
+                status="ready",
+                priority=85,
+                depends_on=["draft-patch-hypothesis"] if any(action["id"] == "draft-patch-hypothesis" for action in actions) else [],
+                blocked_by=["draft-patch-hypothesis"] if any(action["id"] == "draft-patch-hypothesis" for action in actions) else [],
+                rationale="a candidate patch exists but no validation artifact confirms the behavior change yet",
+                expected_artifacts=["binary-verify.json"],
+                suggested_cli=_build_binary_verify_cli(root, binary_path, stdin_file_path=stdin_file_path, runtime_args=runtime_args),
+            )
+        )
+
+    summarize_dependencies = [
+        action["id"]
+        for action in actions
+        if action["status"] == "ready" and action["stage"] in {"identify", "inspect", "reproduce", "triage", "patch", "validate"}
+    ]
+    summarize_blocked_by = list(summarize_dependencies)
+    actions.append(
+        _binary_plan_action(
+            action_id="summarize-local-findings",
+            stage="summarize",
+            kind="summarize_binary_findings",
+            status="blocked" if summarize_dependencies else "context",
+            priority=10,
+            depends_on=summarize_dependencies,
+            blocked_by=summarize_blocked_by,
+            rationale="summary should happen after the immediate local evidence and validation loop stabilizes",
+            expected_artifacts=["binary-summary.md"],
+            suggested_cli=[],
+        )
     )
-    runtime_args = list(runtime_hints.get("args") or inputs.get("args") or [])
 
-    verify_cli = [
+    ordered_actions = sorted(
+        actions,
+        key=lambda item: (_binary_stage_rank(item.get("stage")), -int(item.get("priority", 0)), item.get("id", "")),
+    )
+    readiness = {
+        "runnable_actions": sum(1 for action in ordered_actions if action.get("status") == "ready" and action.get("suggested_cli")),
+        "blocked_actions": sum(1 for action in ordered_actions if action.get("status") == "blocked"),
+        "context_actions": sum(1 for action in ordered_actions if action.get("status") == "context"),
+    }
+    plan_fingerprint = _compute_binary_plan_fingerprint(ordered_actions, binary_path=binary_path, root=root)
+
+    return {
+        "schema": PLAN_SCHEMA,
+        "schema_version": 2,
+        "mode": "binary",
+        "root": root,
+        "plan_fingerprint": plan_fingerprint,
+        "stage_order": list(STAGE_ORDER),
+        "source_artifacts": {
+            "analysis_schema": (analysis.get("schema") if analysis is not None else None),
+            "crash_schema": (crash.get("schema") if crash is not None else None),
+        },
+        "binary_path": binary_path,
+        "binary_fingerprint": (analysis.get("binary_fingerprint") if analysis is not None else None) or (analysis.get("target") if analysis is not None else None) or (crash.get("target") if crash is not None else None),
+        "readiness": readiness,
+        "next_actions": ordered_actions,
+    }
+
+
+def _binary_plan_action(
+    *,
+    action_id: str,
+    stage: str,
+    kind: str,
+    status: str,
+    priority: int,
+    rationale: str,
+    expected_artifacts: list[str],
+    suggested_cli: list[str],
+    depends_on: list[str] | None = None,
+    blocked_by: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": action_id,
+        "stage": stage,
+        "phase": _stage_to_phase(stage),
+        "kind": kind,
+        "status": status,
+        "priority": priority,
+        "depends_on": list(depends_on or []),
+        "blocked_by": list(blocked_by or []),
+        "rationale": rationale,
+        "expected_artifacts": list(expected_artifacts),
+        "suggested_cli": list(suggested_cli),
+    }
+
+
+def _resolve_binary_root(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> str:
+    candidates = [
+        str(item)
+        for item in [
+            (analysis or {}).get("root"),
+            (analysis or {}).get("target", {}).get("root"),
+            (crash or {}).get("root"),
+            (crash or {}).get("target", {}).get("root"),
+        ]
+        if item
+    ]
+    unique = sorted({str(Path(candidate).resolve()) for candidate in candidates})
+    if not unique:
+        raise ValueError("binary plan could not determine root from artifacts")
+    if len(unique) != 1:
+        raise ValueError(f"binary plan artifacts disagree on root: {', '.join(unique)}")
+    return unique[0]
+
+
+def _resolve_binary_path(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> str:
+    candidates = [
+        str(item)
+        for item in [
+            (analysis or {}).get("binary_path"),
+            (analysis or {}).get("target", {}).get("binary_path"),
+            (crash or {}).get("binary_path"),
+            (crash or {}).get("target", {}).get("binary_path"),
+        ]
+        if item
+    ]
+    unique = sorted({str(Path(candidate).resolve()) for candidate in candidates})
+    if not unique:
+        raise ValueError("binary plan could not determine binary path from artifacts")
+    if len(unique) != 1:
+        raise ValueError(f"binary plan artifacts disagree on binary path: {', '.join(unique)}")
+    return unique[0]
+
+
+def _extract_runtime_hints(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+    stdin_file_path = (
+        (analysis or {}).get("runtime_hints", {}).get("stdin_file_path")
+        or (analysis or {}).get("inputs", {}).get("stdin_file_path")
+        or (analysis or {}).get("inputs", {}).get("stdin_sample_path")
+        or (crash or {}).get("runtime_hints", {}).get("stdin_file_path")
+    )
+    runtime_args = list(
+        (analysis or {}).get("runtime_hints", {}).get("args")
+        or (analysis or {}).get("inputs", {}).get("args")
+        or (crash or {}).get("runtime_hints", {}).get("args")
+        or []
+    )
+    return (str(Path(stdin_file_path).resolve()) if stdin_file_path else None), runtime_args
+
+
+def _extract_patch_candidate(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> dict[str, Any] | None:
+    candidate = (crash or {}).get("patch_candidate") or (analysis or {}).get("patch_candidate")
+    return dict(candidate) if isinstance(candidate, dict) else None
+
+
+def _extract_validation_result(analysis: dict[str, Any] | None, crash: dict[str, Any] | None) -> dict[str, Any] | None:
+    validation = (crash or {}).get("validation_result") or (analysis or {}).get("validation_result")
+    return dict(validation) if isinstance(validation, dict) else None
+
+
+def _analysis_has_mitigations(analysis: dict[str, Any] | None) -> bool:
+    if analysis is None:
+        return False
+    mitigations = dict(analysis.get("mitigations") or {})
+    if not mitigations:
+        return False
+    return any(mitigations.get(key) not in {None, "unknown"} for key in {"relro", "canary", "nx", "pie", "fortify"})
+
+
+def _build_binary_scan_cli(root: str, binary_path: str, *, stdin_file_path: str | None, runtime_args: list[str]) -> list[str]:
+    argv = [
+        "python3",
+        "-m",
+        "src.main",
+        "binary-scan",
+        "--root",
+        root,
+        "--binary",
+        binary_path,
+        "--output",
+        _default_binary_artifact_path(root, "binary-analysis.json"),
+    ]
+    if stdin_file_path:
+        argv.extend(["--stdin-file", stdin_file_path])
+    if runtime_args:
+        argv.extend(["--args", *runtime_args])
+    return argv
+
+
+def _build_crash_triage_cli(
+    root: str,
+    binary_path: str,
+    *,
+    stdin_file_path: str | None,
+    runtime_args: list[str],
+    gdb_batch: bool,
+) -> list[str]:
+    argv = [
+        "python3",
+        "-m",
+        "src.main",
+        "crash-triage",
+        "--root",
+        root,
+        "--binary",
+        binary_path,
+        "--output",
+        _default_binary_artifact_path(root, "binary-crash-triage.json" if not gdb_batch else "binary-crash-triage-gdb.json"),
+    ]
+    if stdin_file_path:
+        argv.extend(["--stdin-file", stdin_file_path])
+    if runtime_args:
+        argv.extend(["--args", *runtime_args])
+    if gdb_batch:
+        argv.append("--gdb-batch")
+    return argv
+
+
+def _build_binary_verify_cli(root: str, binary_path: str, *, stdin_file_path: str | None, runtime_args: list[str]) -> list[str]:
+    argv = [
         "python3",
         "-m",
         "src.main",
@@ -302,90 +612,47 @@ def build_binary_plan(analysis: dict[str, Any]) -> dict[str, Any]:
         root,
         "--binary",
         binary_path,
+        "--output",
+        _default_binary_artifact_path(root, "binary-verify.json"),
     ]
     if stdin_file_path:
-        verify_cli.extend(["--stdin-file", str(stdin_file_path)])
+        argv.extend(["--stdin-file", stdin_file_path])
     if runtime_args:
-        verify_cli.extend(["--", *runtime_args])
+        argv.extend(["--", *runtime_args])
+    return argv
 
-    next_actions = [
-        {
-            "id": "identify-binary-fingerprint",
-            "kind": "binary_identify",
-            "phase": "triage",
-            "title": "Review binary metadata and headers",
-            "status": "context",
-            "priority": 100,
-            "detail": "confirm architecture and linkage before runtime checks",
-            "suggested_cli": [],
-        },
-        {
-            "id": "triage-runtime-signals",
-            "kind": "binary_triage",
-            "phase": "triage",
-            "title": "Review extracted risk markers",
-            "status": "context",
-            "priority": 95,
-            "detail": "inspect risky strings/symbols before executing",
-            "suggested_cli": [],
-        },
-        {
-            "id": "validate-baseline-execution",
-            "kind": "binary_verify",
-            "phase": "execution",
-            "title": "Run bounded baseline binary verification",
-            "status": "ready",
-            "priority": 90,
-            "detail": "execute locally with bounded timeout and collect sanitizer signals",
-            "suggested_cli": verify_cli,
-        },
-        {
-            "id": "patch-hypothesis",
-            "kind": "binary_patch_hypothesis",
-            "phase": "synthesis",
-            "title": "Draft local patch hypothesis",
-            "status": "blocked",
-            "priority": 80,
-            "blocked_by": ["validate-baseline-execution"],
-            "depends_on": ["validate-baseline-execution"],
-            "detail": "human-guided patching only; no unattended binary modification",
-            "suggested_cli": [],
-        },
-        {
-            "id": "revalidate-patch",
-            "kind": "binary_revalidate",
-            "phase": "execution",
-            "title": "Re-run bounded verification after patch",
-            "status": "blocked",
-            "priority": 70,
-            "blocked_by": ["patch-hypothesis"],
-            "depends_on": ["patch-hypothesis"],
-            "detail": "confirm behavior change after an explicit patch step",
-            "suggested_cli": [],
-        },
-    ]
 
-    return {
-        "schema": PLAN_SCHEMA,
-        "schema_version": 1,
-        "mode": "binary",
+def _default_binary_artifact_path(root: str, filename: str) -> str:
+    return str((Path(root).resolve() / ".pwn-agent" / filename).resolve())
+
+
+def _stage_to_phase(stage: str) -> str:
+    if stage in {"identify", "inspect", "reproduce", "triage"}:
+        return "triage"
+    if stage in {"patch", "validate"}:
+        return "execution"
+    return "synthesis"
+
+
+def _binary_stage_rank(stage: str | None) -> int:
+    order = {name: index for index, name in enumerate(STAGE_ORDER)}
+    return order.get(stage or "", 999)
+
+
+def _compute_binary_plan_fingerprint(actions: list[dict[str, Any]], *, binary_path: str, root: str) -> str:
+    payload = {
         "root": root,
-        "stage_order": list(STAGE_ORDER),
-        "source_analysis_schema": analysis.get("schema"),
         "binary_path": binary_path,
-        "binary_fingerprint": analysis.get("binary_fingerprint") or analysis.get("target", {}),
-        "readiness": {
-            "runnable_actions": 1,
-            "blocked_actions": 2,
-            "context_actions": 2,
-        },
-        "next_actions": next_actions,
+        "actions": actions,
     }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 def render_binary_plan_markdown(plan: dict[str, Any]) -> str:
     lines = ["# Binary Plan", ""]
     lines.append(f"- Schema: {plan.get('schema')}")
+    lines.append(f"- Plan fingerprint: `{plan.get('plan_fingerprint')}`")
     lines.append(f"- Binary: `{plan.get('binary_path')}`")
     lines.append(f"- Stage order: {', '.join(plan.get('stage_order', []))}")
     readiness = dict(plan.get("readiness") or {})
@@ -397,8 +664,8 @@ def render_binary_plan_markdown(plan: dict[str, Any]) -> str:
     lines.extend(["", "## Next Actions", ""])
     for action in plan.get("next_actions", []):
         lines.append(
-            f"- [{action.get('phase', 'execution')}] [{action.get('status', 'unknown')}] "
-            f"{action.get('id')} :: {action.get('title', '')}"
+            f"- [{action.get('stage', 'unknown')}] [{action.get('status', 'unknown')}] "
+            f"{action.get('id')} :: {action.get('kind', '')}"
         )
     return "\n".join(lines) + "\n"
 

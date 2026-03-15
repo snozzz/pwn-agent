@@ -64,6 +64,22 @@ class MainModeTests(unittest.TestCase):
         self.assertEqual(args.timeout, 9)
         self.assertTrue(args.gdb_batch)
 
+    def test_build_parser_supports_binary_plan_from_crash_artifact(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "binary-plan",
+                "--crash-json",
+                "/tmp/demo/crash.json",
+                "--output",
+                "/tmp/demo/binary-plan.json",
+            ]
+        )
+
+        self.assertEqual(args.command, "binary-plan")
+        self.assertIsNone(args.analysis_json)
+        self.assertEqual(args.crash_json, Path("/tmp/demo/crash.json"))
+
     def test_main_routes_audit_commands_to_audit_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
