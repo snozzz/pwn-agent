@@ -7,7 +7,7 @@ import json
 import subprocess
 from typing import Any
 
-from .command_registry import validate_main_cli
+from .command_registry import LEAF_MAIN_SUBCOMMANDS, validate_main_cli
 
 
 MODULE_ROOT = Path(__file__).resolve().parents[1]
@@ -852,6 +852,7 @@ def _validate_suggested_cli(action: dict[str, Any], *, expected_root: Path | Non
             workspace_root=expected_root,
             expected_root=expected_root,
             cwd=MODULE_ROOT,
+            allowed_subcommands=LEAF_MAIN_SUBCOMMANDS,
         )
     except ValueError as exc:
         raise ExecutorError(f"unsupported suggested_cli for action {action.get('id')}: {exc}") from exc

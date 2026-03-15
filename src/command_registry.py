@@ -22,7 +22,7 @@ class CommandRule:
     validator: Callable[[list[str], Path, Path], None]
 
 
-ALLOWED_MAIN_SUBCOMMANDS = {
+LEAF_MAIN_SUBCOMMANDS = {
     "verify-run",
     "rebuild-target",
     "rebuild-verify",
@@ -30,12 +30,18 @@ ALLOWED_MAIN_SUBCOMMANDS = {
     "binary-verify",
     "binary-triage",
     "binary-scan",
-    "binary-plan",
-    "binary-run",
     "crash-triage",
     "binary-validate",
     "patch-validate",
 }
+
+CONTROL_PLANE_MAIN_SUBCOMMANDS = {
+    "binary-plan",
+    "binary-run",
+    "agent-loop",
+}
+
+ALLOWED_MAIN_SUBCOMMANDS = LEAF_MAIN_SUBCOMMANDS | CONTROL_PLANE_MAIN_SUBCOMMANDS
 
 
 def _require_workspace_bound_path(token: str, *, workspace_root: Path, cwd: Path, label: str) -> Path:
@@ -93,7 +99,13 @@ def _validate_strings(argv: list[str], workspace_root: Path, cwd: Path) -> None:
 
 
 def _validate_python_main(argv: list[str], workspace_root: Path, cwd: Path) -> None:
-    _validate_main_cli(argv, workspace_root=workspace_root, expected_root=None, cwd=cwd)
+    _validate_main_cli(
+        argv,
+        workspace_root=workspace_root,
+        expected_root=None,
+        cwd=cwd,
+        allowed_subcommands=ALLOWED_MAIN_SUBCOMMANDS,
+    )
 
 
 def _validate_runtime_argument_tokens(tokens: list[str], *, workspace_root: Path, cwd: Path) -> None:
@@ -202,6 +214,7 @@ def validate_main_cli(
     workspace_root: Path | None,
     expected_root: Path | None,
     cwd: Path,
+    allowed_subcommands: set[str] | frozenset[str] | None = None,
 ) -> tuple[list[str], Path]:
     if len(argv) < 6:
         raise ValueError("unsupported suggested_cli: too short")
@@ -209,7 +222,8 @@ def validate_main_cli(
         raise ValueError("unsupported suggested_cli prefix")
 
     subcommand = argv[3]
-    if subcommand not in ALLOWED_MAIN_SUBCOMMANDS:
+    effective_allowed = allowed_subcommands if allowed_subcommands is not None else ALLOWED_MAIN_SUBCOMMANDS
+    if subcommand not in effective_allowed:
         raise ValueError(f"subcommand not allowed: {subcommand}")
 
     root = _extract_root(argv)
@@ -249,6 +263,7 @@ def _validate_path_options(args: list[str], root: Path) -> None:
         "--analysis-json",
         "--patch-validation-json",
         "--crash-json",
+        "--verify-json",
         "--stdin-file",
         "--stdin-sample",
         "--protocol-sample",
@@ -257,6 +272,10 @@ def _validate_path_options(args: list[str], root: Path) -> None:
         "--config",
         "--patch-json",
         "--patch-script",
+        "--plan-output",
+        "--model-response-json",
+        "--model-response-jsonl",
+        "--executor-state",
     }
 
     index = 0

@@ -97,6 +97,7 @@ Patch validation now accepts structured patch artifacts/scripts, reuses the boun
 Patch validation now runs inside isolated scratch workspaces under `.pwn-agent/patch-workspaces/...`, so repeated validation attempts do not contaminate the original workspace tree.
 The bounded `agent-loop` layer now lets a model choose only from dependency-resolved plan actions using structured JSON; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later fine-tuning.
 `binary-verify` artifacts now participate in replanning as real runtime evidence, so loop replanning is no longer a no-op after validation steps.
+Planner and runner commands (`binary-plan`, `binary-run`, `agent-loop`) are control-plane only; executor plan actions may invoke only bounded leaf commands.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,

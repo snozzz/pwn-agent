@@ -531,6 +531,170 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaises(ExecutorError):
                 execute_plan(plan_path, dry_run=True)
 
+    def test_execute_plan_rejects_control_plane_binary_plan_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "replan-self",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Replan inside executor",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "binary-plan",
+                                    "--analysis-json",
+                                    str(root / "analysis.json"),
+                                    "--output",
+                                    str(root / "binary-plan.json"),
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError) as ctx:
+                execute_plan(plan_path, dry_run=True)
+
+        self.assertIn("subcommand not allowed: binary-plan", str(ctx.exception))
+
+    def test_execute_plan_rejects_control_plane_binary_run_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "rerun-self",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Run inside executor",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "binary-run",
+                                    "--plan",
+                                    str(root / "binary-plan.json"),
+                                    "--output",
+                                    str(root / "binary-run.json"),
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError) as ctx:
+                execute_plan(plan_path, dry_run=True)
+
+        self.assertIn("subcommand not allowed: binary-run", str(ctx.exception))
+
+    def test_execute_plan_rejects_control_plane_agent_loop_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "loop-self",
+                                "kind": "invalid",
+                                "phase": "execution",
+                                "title": "Loop inside executor",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "agent-loop",
+                                    "--root",
+                                    str(root),
+                                    "--plan",
+                                    str(root / "binary-plan.json"),
+                                    "--model-response-json",
+                                    str(root / "choice.json"),
+                                    "--output",
+                                    str(root / "trajectory.json"),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ExecutorError) as ctx:
+                execute_plan(plan_path, dry_run=True)
+
+        self.assertIn("subcommand not allowed: agent-loop", str(ctx.exception))
+
+    def test_execute_plan_accepts_binary_scan_leaf_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "demo.bin"
+            binary.write_bytes(b"\x7fELF" + b"A" * 64)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "collect-binary-evidence",
+                                "kind": "binary_scan",
+                                "phase": "triage",
+                                "title": "Collect binary evidence",
+                                "status": "ready",
+                                "priority": 100,
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "binary-scan",
+                                    "--root",
+                                    str(root),
+                                    "--binary",
+                                    str(binary),
+                                    "--output",
+                                    str(root / "binary-analysis.json"),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = execute_plan(plan_path, dry_run=True)
+
+        self.assertEqual(summary.selected_action_ids, ["collect-binary-evidence"])
+        self.assertEqual(summary.previewed_action_ids, ["collect-binary-evidence"])
+
     def test_execute_plan_rejects_malformed_suggested_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

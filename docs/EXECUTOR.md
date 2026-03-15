@@ -18,6 +18,7 @@ The executor now produces a richer execution summary and can persist bounded run
 - explicit transition entries showing how each selected action moved through the loop
 - shared command-policy validation for internal `python3 -m src.main ...` actions
 - root consistency checks so action `--root` must match the plan/workflow root
+- leaf-action enforcement so planner/control-plane commands cannot recursively execute through plan `suggested_cli`
 
 ## Resume support
 
@@ -42,3 +43,26 @@ When the plan has been regenerated, the executor now reconciles the persisted st
 ## Why it matters
 
 This makes the `plan -> run-plan -> inspect results -> continue` loop easier to automate, because the next controller can see what remains runnable, what is still blocked by ordering, and what already completed in an earlier turn without recomputing everything from scratch.
+
+## Control Plane vs Leaf Actions
+
+The executor only accepts leaf execution actions from internal `python3 -m src.main ...` commands.
+
+Leaf actions include bounded tool or validation steps such as:
+
+- `verify-run`
+- `rebuild-plan`
+- `rebuild-target`
+- `rebuild-verify`
+- `binary-scan`
+- `crash-triage` / `binary-triage`
+- `binary-verify` / `binary-validate`
+- `patch-validate`
+
+Control-plane commands are not executor-eligible, even though they are valid CLI entry points:
+
+- `binary-plan`
+- `binary-run`
+- `agent-loop`
+
+This prevents recursive orchestration and malformed self-invocation through plan actions.
