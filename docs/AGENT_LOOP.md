@@ -8,6 +8,7 @@ The loop lets a model choose among already-planned bounded actions, explain the 
 
 The model does not generate shell commands.
 It only emits structured JSON that references action ids already present in the bounded plan.
+The loop does not invoke a model backend itself; it consumes structured responses from a local json/jsonl source.
 
 ## Inputs
 
@@ -51,6 +52,7 @@ It records:
 - final summary text assembled from `summary_update` fields
 
 Persistent resume state uses `pwn-agent.agent-loop-state.v1`.
+Replanning can consume analysis, crash, patch-validation, and verify artifacts when those inputs are available.
 
 ## Safety Model
 
@@ -58,6 +60,7 @@ Persistent resume state uses `pwn-agent.agent-loop-state.v1`.
 - no remote targeting
 - no unrestricted shell autonomy
 - no model-generated shell commands
+- no built-in remote inference or model transport
 - executor still validates `chosen_action_id` against the bounded plan
 - command execution still goes through the existing command-policy and executor layers
 

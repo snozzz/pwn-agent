@@ -23,10 +23,10 @@ Binary mode emits separate artifacts from source-audit outputs:
 - `binary-run` uses the bounded plan executor and writes an execution summary for plan progress
 
 These schemas are intentionally separate from `audit.json` to avoid conflating source-level and binary-level evidence.
-See [BINARY_AUDIT_EXAMPLE.json](/home/snoz/pwn-agent/docs/BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
-See [BINARY_PLANNER.md](/home/snoz/pwn-agent/docs/BINARY_PLANNER.md) for the planner schema and migration notes.
-See [BINARY_PATCH_WORKFLOW.md](/home/snoz/pwn-agent/docs/BINARY_PATCH_WORKFLOW.md) for bounded patch validation.
-See [AGENT_LOOP.md](/home/snoz/pwn-agent/docs/AGENT_LOOP.md) for the bounded model-driven loop.
+See [BINARY_AUDIT_EXAMPLE.json](BINARY_AUDIT_EXAMPLE.json) for a concrete artifact example.
+See [BINARY_PLANNER.md](BINARY_PLANNER.md) for the planner schema and migration notes.
+See [BINARY_PATCH_WORKFLOW.md](BINARY_PATCH_WORKFLOW.md) for bounded patch validation.
+See [AGENT_LOOP.md](AGENT_LOOP.md) for the bounded model-driven loop.
 
 ## Supported stages
 
@@ -48,7 +48,7 @@ Current command mapping:
 - `binary-run` executes bounded ready actions while preferring earlier investigation stages before later patch/summary stages
 - `binary-verify` performs bounded local runtime validation and sanitizer-signal capture
 - `patch-validate` applies a structured patch artifact/script, optionally rebuilds a target, and validates launch/baseline/regression behavior
-- `agent-loop` consumes structured model choices over bounded plan actions and logs the resulting local trajectory
+- `agent-loop` consumes pre-generated structured model choices over bounded plan actions and logs the resulting local trajectory
 
 Execution boundary:
 
@@ -60,6 +60,7 @@ Execution boundary:
 
 - clean verify results suppress redundant replay/verify actions
 - failing verify results produce bounded follow-up triage actions
+- absent verify input leaves prior planner behavior unchanged
 
 `patch-validate` now uses isolated scratch workspaces under `.pwn-agent/patch-workspaces/...` so the original workspace tree is not mutated during validation.
 
@@ -107,12 +108,13 @@ Patch validation artifacts normalize into these top-level sections:
 - workspace-bounded command policy
 - explicit command registry with per-command argument validation
 - path-like argument binding to workspace/root
-- fixed command timeout (with per-command overrides when defined)
+- bounded command timeout (with command-rule defaults and per-run overrides where exposed)
 - per-command output truncation policy
 - local execution only
 - no shell passthrough
 - no arbitrary patch code execution
 - no model-generated shell commands
+- no built-in remote model transport; loop/model integration is via local structured response files
 
 ## Explicit non-goals
 

@@ -56,8 +56,9 @@ print('A' * 256)
 PY
 )
 python3 -m src.main audit --root examples --report out/audit.md --config pwn-agent.json
-# if examples/verification-plan.json exists, audit will append verification results
-# if compile_commands.json exists, audit will also append rebuild+verify pipeline evidence
+# audit is not read-only when these optional files exist:
+# - examples/verification-plan.json triggers a bounded verification run
+# - compile_commands.json triggers a bounded rebuild+verify pipeline attempt
 # audit will also list detected input surfaces, file-level hotspots, and function focus when functions are detected
 # --audit-json writes a single structured summary for downstream tooling
 python3 -m src.main rebuild-plan --root examples
@@ -78,12 +79,13 @@ The command-execution layer is intentionally constrained:
 
 - workspace-bounded cwd
 - explicit command policy registry (`src/command_registry.py`) with per-command argument rules
-- fixed timeout for command execution
+- bounded timeout for command execution, using command-rule defaults plus per-run overrides where exposed
 - per-command output truncation policy
 - internal `python3 -m src.main ...` leaf actions execute through that same policy layer
 - no shell passthrough by default
 
 Binary mode stays bounded to local tooling and bounded local binary execution; it does not provide unrestricted shell execution or unattended remote exploitation flows.
+`agent-loop` does not call a model backend by itself; it consumes structured local JSON/JSONL choices and executes only already-planned bounded actions.
 
 ## Current status
 
@@ -103,6 +105,7 @@ Planner and runner commands (`binary-plan`, `binary-run`, `agent-loop`) are cont
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,
 and an optional `--audit-json` export that aggregates the audit workflow outputs into one machine-readable artifact.
+When `verification-plan.json` or `compile_commands.json` are present, `audit` may also run bounded local verification or rebuild+verify steps; this is conditional behavior, not a read-only default.
 A new `plan-audit` step can then turn that artifact into a compact orchestration plan for a future model-driven loop, with explicit staged guidance about which actions to take next, and `run-plan` now emits a richer execution summary with runnable/deferred inventory plus follow-up action hints.
 The audit export now includes concise file/function rollups plus execution-readiness data, and the plan output now marks
 which actions are `context`, `ready`, or `blocked`, grouped into explicit `triage`, `execution`, and `synthesis` phases.

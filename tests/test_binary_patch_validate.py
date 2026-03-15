@@ -227,6 +227,7 @@ class BinaryPatchValidateTests(unittest.TestCase):
             second_source = Path(second["workspace"]["isolated_workspace_path"]) / "src" / "demo.c"
             self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", first_source.read_text(encoding="utf-8"))
             self.assertIn("snprintf(buf, sizeof(buf), \"%s\", input);", second_source.read_text(encoding="utf-8"))
+            self.assertFalse((Path(second["workspace"]["isolated_workspace_path"]) / ".pwn-agent" / "patch-workspaces").exists())
 
     def test_patch_validate_can_cleanup_workspace_on_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

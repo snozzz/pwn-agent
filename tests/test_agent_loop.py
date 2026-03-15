@@ -11,6 +11,81 @@ from src.modes.binary.loop import run_agent_loop
 
 
 class AgentLoopTests(unittest.TestCase):
+    def test_agent_loop_valid_choice_executes_bounded_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "binary-plan.json"
+            output_path = root / "trajectory.json"
+            state_path = root / "loop-state.json"
+            model_response_path = root / "model-choice.json"
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "pwn-agent.binary-plan.v2",
+                        "schema_version": 2,
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "list-rebuild-targets",
+                                "stage": "identify",
+                                "phase": "triage",
+                                "kind": "list_rebuild_targets",
+                                "status": "ready",
+                                "priority": 50,
+                                "depends_on": [],
+                                "blocked_by": [],
+                                "rationale": "enumerate bounded targets",
+                                "expected_artifacts": [],
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            model_response_path.write_text(
+                json.dumps(
+                    {
+                        "chosen_action_id": "list-rebuild-targets",
+                        "rationale": "Take the only bounded action.",
+                        "confidence": 0.91,
+                        "summary_update": "Enumerated local rebuild targets.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            artifact = run_agent_loop(
+                root=root,
+                plan_path=plan_path,
+                trajectory_path=output_path,
+                model_response_path=model_response_path,
+                model_response_format="json",
+                state_path=state_path,
+                max_steps=1,
+                max_failures=1,
+                dry_run=False,
+                timeout_seconds=30,
+            )
+
+            self.assertEqual(artifact["status"], "step-budget-exhausted")
+            self.assertEqual(artifact["step_count"], 1)
+            self.assertEqual(artifact["failure_count"], 0)
+            self.assertTrue(artifact["iterations"][0]["model_choice"]["accepted"])
+            self.assertEqual(
+                artifact["iterations"][0]["execution_result"]["completed_action_ids"],
+                ["list-rebuild-targets"],
+            )
+
     def test_agent_loop_rejects_invalid_model_choice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -82,6 +157,90 @@ class AgentLoopTests(unittest.TestCase):
             self.assertIn("not present in bounded plan candidates", artifact["iterations"][0]["model_choice"]["error"])
             persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted_state["consumed_model_responses"], 1)
+
+    def test_agent_loop_invalid_choice_increments_failure_budget_without_step_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "binary-plan.json"
+            output_path = root / "trajectory.json"
+            state_path = root / "loop-state.json"
+            model_response_path = root / "model-choice.jsonl"
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "pwn-agent.binary-plan.v2",
+                        "schema_version": 2,
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "list-rebuild-targets",
+                                "stage": "identify",
+                                "phase": "triage",
+                                "kind": "list_rebuild_targets",
+                                "status": "ready",
+                                "priority": 50,
+                                "depends_on": [],
+                                "blocked_by": [],
+                                "rationale": "enumerate bounded targets",
+                                "expected_artifacts": [],
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            model_response_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "chosen_action_id": "not-in-plan",
+                                "rationale": "invalid first choice",
+                                "confidence": 0.2,
+                                "summary_update": "Bad choice.",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "chosen_action_id": "list-rebuild-targets",
+                                "rationale": "recover with bounded action",
+                                "confidence": 0.8,
+                                "summary_update": "Recovered.",
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            artifact = run_agent_loop(
+                root=root,
+                plan_path=plan_path,
+                trajectory_path=output_path,
+                model_response_path=model_response_path,
+                model_response_format="jsonl",
+                state_path=state_path,
+                max_steps=1,
+                max_failures=2,
+                dry_run=True,
+            )
+
+            self.assertEqual(artifact["status"], "step-budget-exhausted")
+            self.assertEqual(artifact["step_count"], 1)
+            self.assertEqual(artifact["failure_count"], 1)
+            self.assertEqual(len(artifact["iterations"]), 2)
+            self.assertFalse(artifact["iterations"][0]["model_choice"]["accepted"])
+            self.assertEqual(artifact["iterations"][1]["status"], "dry-run")
 
     def test_agent_loop_replans_from_verify_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -320,6 +479,80 @@ class AgentLoopTests(unittest.TestCase):
             self.assertEqual(len(resumed["iterations"]), 2)
             persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted_state["consumed_model_responses"], 1)
+
+    def test_agent_loop_dry_run_does_not_mark_execution_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "binary-plan.json"
+            output_path = root / "trajectory.json"
+            state_path = root / "loop-state.json"
+            executor_state_path = root / "executor-state.json"
+            model_response_path = root / "model-choice.json"
+            (root / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "pwn-agent.binary-plan.v2",
+                        "schema_version": 2,
+                        "root": str(root),
+                        "next_actions": [
+                            {
+                                "id": "list-rebuild-targets",
+                                "stage": "identify",
+                                "phase": "triage",
+                                "kind": "list_rebuild_targets",
+                                "status": "ready",
+                                "priority": 50,
+                                "depends_on": [],
+                                "blocked_by": [],
+                                "rationale": "enumerate bounded targets",
+                                "expected_artifacts": [],
+                                "suggested_cli": [
+                                    "python3",
+                                    "-m",
+                                    "src.main",
+                                    "rebuild-plan",
+                                    "--root",
+                                    str(root),
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            model_response_path.write_text(
+                json.dumps(
+                    {
+                        "chosen_action_id": "list-rebuild-targets",
+                        "rationale": "Preview the bounded action.",
+                        "confidence": 0.7,
+                        "summary_update": "Previewed rebuild target enumeration.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            artifact = run_agent_loop(
+                root=root,
+                plan_path=plan_path,
+                trajectory_path=output_path,
+                model_response_path=model_response_path,
+                model_response_format="json",
+                state_path=state_path,
+                executor_state_path=executor_state_path,
+                max_steps=1,
+                max_failures=1,
+                dry_run=True,
+            )
+
+            persisted_executor_state = json.loads(executor_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["status"], "step-budget-exhausted")
+            self.assertEqual(artifact["iterations"][0]["status"], "dry-run")
+            self.assertEqual(artifact["iterations"][0]["execution_result"]["completed_action_ids"], [])
+            self.assertEqual(artifact["iterations"][0]["execution_result"]["previewed_action_ids"], ["list-rebuild-targets"])
+            self.assertEqual(persisted_executor_state["completed_action_ids"], [])
 
 
 if __name__ == "__main__":

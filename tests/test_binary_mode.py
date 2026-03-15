@@ -6,7 +6,14 @@ import unittest
 from pathlib import Path
 
 from src.executor import execute_plan
-from src.modes.binary.workflow import ANALYSIS_SCHEMA, PLAN_SCHEMA, TRIAGE_SCHEMA, VERIFY_SCHEMA, build_binary_plan
+from src.modes.binary.workflow import (
+    ANALYSIS_SCHEMA,
+    PATCH_VALIDATION_SCHEMA,
+    PLAN_SCHEMA,
+    TRIAGE_SCHEMA,
+    VERIFY_SCHEMA,
+    build_binary_plan,
+)
 
 
 class BinaryModeTests(unittest.TestCase):
@@ -128,6 +135,62 @@ class BinaryModeTests(unittest.TestCase):
         self.assertEqual(triage_action["stage"], "triage")
         self.assertEqual(triage_action["suggested_cli"][3], "crash-triage")
         self.assertIn("--gdb-batch", triage_action["suggested_cli"])
+
+    def test_binary_plan_accepts_crash_only_artifact(self) -> None:
+        crash = {
+            "schema": TRIAGE_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "runtime_hints": {
+                "args": ["seed"],
+                "stdin_file_path": None,
+            },
+            "crash_summary": {
+                "suspicious": True,
+            },
+            "debugger_summary": {
+                "attempted": False,
+                "collected": False,
+            },
+        }
+
+        plan = build_binary_plan(crash=crash)
+        ordered_ids = [action["id"] for action in plan["next_actions"]]
+
+        self.assertEqual(plan["source_artifacts"]["analysis_schema"], None)
+        self.assertEqual(plan["source_artifacts"]["crash_schema"], TRIAGE_SCHEMA)
+        self.assertEqual(ordered_ids, ["collect-binary-evidence", "collect-debugger-context", "draft-patch-hypothesis", "summarize-local-findings"])
+
+    def test_binary_plan_uses_patch_validation_artifact_without_redundant_verify(self) -> None:
+        validation = {
+            "schema": PATCH_VALIDATION_SCHEMA,
+            "root": "/tmp/demo",
+            "binary_path": "/tmp/demo/app",
+            "target": {
+                "root": "/tmp/demo",
+                "binary_path": "/tmp/demo/app",
+            },
+            "patch_metadata": {
+                "patch_id": "guard-copy",
+                "summary": "validated patch candidate",
+            },
+            "validation_result": {
+                "overall_status": "passed",
+                "launch": {"status": "passed"},
+                "baseline": {"status": "passed"},
+                "regression": {"status": "passed"},
+            },
+        }
+
+        plan = build_binary_plan(validation=validation)
+        ordered_ids = [action["id"] for action in plan["next_actions"]]
+
+        self.assertEqual(plan["source_artifacts"]["validation_schema"], PATCH_VALIDATION_SCHEMA)
+        self.assertNotIn("validate-candidate-patch", ordered_ids)
+        self.assertEqual(
+            ordered_ids,
+            ["collect-binary-evidence", "reproduce-target-behavior", "summarize-local-findings"],
+        )
 
     def test_binary_plan_adds_validation_dependency_after_patch_hypothesis(self) -> None:
         analysis = {

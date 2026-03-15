@@ -75,6 +75,12 @@ Current deterministic planning rules:
 - patch candidate exists without validation evidence from patch-validation or verify artifacts: suggest `binary-verify`
 - summary stays blocked behind earlier ready actions
 
+Verify artifacts are therefore real planner inputs rather than loop-only bookkeeping:
+
+- clean verify evidence can unblock later summarize work by removing redundant runtime-validation steps
+- failing verify evidence can introduce or reprioritize bounded triage actions
+- when verify input is absent, planner behavior falls back to the analysis/crash/patch-validation evidence already provided
+
 Ordering is deterministic:
 
 - earlier `stage` sorts before later `stage`

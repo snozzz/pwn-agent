@@ -78,7 +78,8 @@ Current behavior is intentionally narrow:
 
 - only actions already marked `ready` and carrying `suggested_cli` are considered runnable
 - commands must be internal `python3 -m src.main ...` invocations
-- only a small allowlisted subcommand set is executable (`verify-run`, `rebuild-target`, `rebuild-verify`, `rebuild-plan`)
+- internal commands execute through the shared command-policy layer, so timeout and truncation behavior matches other bounded commands
+- this audit planner currently emits only audit leaf actions (`verify-run`, `rebuild-target`, `rebuild-verify`, `rebuild-plan`), even though the global executor leaf registry is broader for binary mode
 - execution is sequential and bounded by `--max-actions` (default `1`)
 - `--phase execution` can filter to one stage when the caller only wants runnable tool work
 - `depends_on` is respected during selection, so rebuild+verify can stay gated behind target enumeration/rebuild steps

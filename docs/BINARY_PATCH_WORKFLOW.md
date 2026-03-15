@@ -84,6 +84,7 @@ Cleanup policy:
 - `--cleanup-on-success` removes the scratch workspace after a successful run
 
 This keeps the original workspace reproducible across repeated validation attempts.
+The output artifact records the original root, isolated workspace path, cleanup outcome, and patched binary path so later replanning or review can reason about what was actually validated.
 
 ## Safety Model
 
