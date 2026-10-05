@@ -71,6 +71,10 @@ python3 -m src.main binary-run --plan out/binary-plan.json --output out/binary-r
 python3 -m src.main binary-verify --root examples --binary examples/vuln_demo_asan --output out/binary-verify.json
 python3 -m src.main patch-validate --root examples --patch-script tests/fixtures/patch_script_replace_text.json --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --output out/patch-validation.json --report out/patch-validation.md
 python3 -m src.main agent-loop --root examples --plan out/binary-plan.json --analysis-json out/binary-analysis.json --crash-json out/crash-triage.json --model-response-jsonl out/model-choices.jsonl --output out/trajectory.json --state out/loop-state.json --executor-state out/executor-state.json --max-steps 2 --dry-run
+# or drive the loop with the in-process controller instead of a pre-generated response file:
+python3 -m src.main agent-loop --root examples --plan out/binary-plan.json --analysis-json out/binary-analysis.json --controller deterministic --output out/trajectory.json --state out/loop-state.json --executor-state out/executor-state.json --max-steps 6 --max-no-progress 3
+# score a trajectory (or compare several controllers on the same task):
+python3 -m src.main agent-eval --trajectory out/trajectory.json --output out/metrics.json --report out/metrics.md
 ```
 
 ## Safety model
@@ -85,7 +89,7 @@ The command-execution layer is intentionally constrained:
 - no shell passthrough by default
 
 Binary mode stays bounded to local tooling and bounded local binary execution; it does not provide unrestricted shell execution or unattended remote exploitation flows.
-`agent-loop` does not call a model backend by itself; it consumes structured local JSON/JSONL choices and executes only already-planned bounded actions.
+`agent-loop` selects actions through a controller abstraction (`src/agent/controller.py`): either an in-process `deterministic` controller or a `scripted` controller that replays local JSON/JSONL choices. Whichever controller is used, it may only reference bounded candidate action ids from the current plan — it never emits shell commands, and no network/model transport is shipped. A provider backend (Claude-compatible, local Qwen, OpenAI-compatible) would implement the same `AgentModel` interface as an out-of-process adapter.
 
 ## Current status
 
@@ -98,9 +102,11 @@ Crash triage now emits a separate bounded artifact with execution outcome, crash
 Binary planning is now stage-aware rather than only phase-aware, with explicit `identify -> inspect -> reproduce -> triage -> patch -> validate -> summarize` ordering and dependency-bearing next actions derived from binary evidence.
 Patch validation now accepts structured patch artifacts/scripts, reuses the bounded rebuild and binary execution primitives, and emits explicit launch/baseline/regression results plus residual-risk notes for the next defensive loop.
 Patch validation now runs inside isolated scratch workspaces under `.pwn-agent/patch-workspaces/...`, so repeated validation attempts do not contaminate the original workspace tree.
-The bounded `agent-loop` layer consumes pre-generated structured choices over dependency-resolved plan actions; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later review or offline training.
+The bounded `agent-loop` layer drives a controller (in-process `deterministic`, or `scripted` replay of local choices) over dependency-resolved plan actions; the executor still rejects anything outside the current bounded plan, and every iteration is logged for later review or offline training.
+Each loop step maintains a structured belief state (`src/agent/state.py`) with an evidence ledger derived strictly from tool output (`src/agent/evidence.py`); loop protection (`src/agent/progress.py`) adds `no-progress` and `repeated-action` terminal statuses so stalled episodes stop honestly.
+`agent-eval` turns recorded trajectories into measured metrics (`src/agent/evaluation.py`) for comparing controllers on identical tasks.
 `binary-verify` artifacts now participate in replanning as real runtime evidence, so loop replanning is no longer a no-op after validation steps.
-Planner and runner commands (`binary-plan`, `binary-run`, `agent-loop`) are control-plane only; executor plan actions may invoke only bounded leaf commands.
+Planner, runner, loop, and evaluation commands (`binary-plan`, `binary-run`, `agent-loop`, `agent-eval`) are control-plane only; executor plan actions may invoke only bounded leaf commands.
 
 It now also supports ingesting `compile_commands.json`, surfacing a compile database summary during audit runs,
 best-effort function-level focus so findings and input surfaces can be tied back to enclosing functions,

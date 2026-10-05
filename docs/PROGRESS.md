@@ -1,5 +1,39 @@
 # Progress
 
+## Agent v2 Reasoning Layer
+
+- task completed: introduced a genuine autonomous-agent reasoning layer (`src/agent/`)
+  above the unchanged executor/policy enforcement boundary, resolving the central
+  limitation that the loop replayed pre-generated model choices instead of invoking a
+  controller
+- files changed: new `src/agent/{__init__,state,evidence,controller,progress,evaluation}.py`;
+  `src/modes/binary/loop.py` (controller/state/evidence/guards integration);
+  `src/modes/binary/cli.py` (`--controller`, `--objective`, `--max-no-progress`,
+  `--max-repeats`, new `agent-eval` subcommand); `src/command_registry.py`
+  (`agent-eval` registered control-plane; `--trajectory`/`--metrics` path options);
+  `scripts/run_tests.py`; README and `docs/AGENT_LOOP.md`
+- capabilities added:
+  - controller abstraction (`AgentModel`) with in-process `DeterministicController` and
+    legacy `ScriptedController`; the loop now runs with no pre-generated file
+  - structured `AgentState` belief state + tool-derived evidence ledger; controller prose
+    is kept separate from verified facts
+  - decision schema v2 (optional `hypothesis`/`expected_information_gain`/`state_update`/
+    `usage`) with v1 validation preserved verbatim
+  - loop protection: `no-progress` and `repeated-action` terminal statuses
+  - `agent-eval` trajectory metrics harness for controller comparison
+- tests added: `tests/test_agent_{state,evidence,controller,progress,evaluation,loop_v2}.py`
+  (65 new tests); all 6 legacy loop tests preserved unchanged
+- verification: full suite 132 passing on CPython 3.11 (macOS/arm64) and on CPython 3.12
+  (Linux/x86_64); real x86 ELF end-to-end confirmed (SIGSEGV crash triage with gdb-batch,
+  deterministic controller driving a clean autonomous episode, agent-eval metrics)
+- remaining known risks:
+  - no provider (Claude/Qwen) backend is shipped; only the `AgentModel` seam + deterministic
+    and scripted controllers exist, by design (no network/model transport added)
+  - belief state is recomputed per replan rather than merged; evidence carries forward but
+    hypotheses are not yet reconciled against regenerated plans
+  - gdb batch register/backtrace parsing returned empty arrays on one `-no-pie` x86 target
+    even though collection succeeded; parser robustness is a follow-up
+
 ## Documentation Consistency Pass
 
 - task completed: aligned README and docs with the current bounded binary-mode implementation and tightened claims that were broader than the code

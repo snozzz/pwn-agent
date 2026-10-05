@@ -42,16 +42,18 @@ This file is the resume point. Another context window can continue from "Next ta
 - Module 4 (commit 6028aff, pushed): loop/cli integration + v2 tests. Deterministic
   controller verified live via CLI (`--controller deterministic`, no response file).
 
+- Module 5 (commit 3297046, pushed): `src/agent/evaluation.py` + `agent-eval` CLI + tests.
+- x86 ELF end-to-end on researcher host: suite 132 passing on py3.12/x86_64; real SIGSEGV
+  crash-triage with gdb-batch; deterministic loop clean episode; agent-eval metrics.
+- Module 6 (docs): AGENT_LOOP.md rewritten, README + PROGRESS updated, OVERNIGHT_REPORT.md.
+
 ## Current task
 
-Module 5: `src/agent/evaluation.py` + `agent-eval` control-plane CLI (+ tests).
+Session wrap-up complete. All planned modules landed and pushed.
 
 ## Next task
 
-Module order (each = commit + push):
-5. `src/agent/evaluation.py` + `agent-eval` CLI (+ tests).
-6. Docs: AGENT_LOOP.md, PROGRESS.md, README, OVERNIGHT_REPORT.md.
-7. Optional: realistic x86 ELF + gdb end-to-end on the researcher host (demo evidence).
+See `docs/OVERNIGHT_REPORT.md` "Recommended next steps" (provider adapter first).
 
 ## Available resources
 
