@@ -30,26 +30,28 @@ This file is the resume point. Another context window can continue from "Next ta
 ## Test status
 
 - Baseline: 67 passed / 0 failed (py3.11).
-- Current: see latest "Completed" entry.
+- Current: 124 passed / 0 failed (py3.11).
 
 ## Completed
 
 - Phase 0 baseline established → `docs/OVERNIGHT_BASELINE.md`.
 - Phase 1/2 review + prioritized plan → `docs/AGENT_V2_PLAN.md`.
+- Module 1 (commit d8f5092, pushed): `src/agent/state.py` + `evidence.py` + tests.
+- Module 2 (commit 7795b0f, pushed): `src/agent/controller.py` + tests.
+- Module 3 (commit 2bb4d34, pushed): `src/agent/progress.py` + tests.
+- Module 4 (commit 6028aff, pushed): loop/cli integration + v2 tests. Deterministic
+  controller verified live via CLI (`--controller deterministic`, no response file).
 
 ## Current task
 
-(implementation in progress — see AGENT_V2_PLAN.md ordering)
+Module 5: `src/agent/evaluation.py` + `agent-eval` control-plane CLI (+ tests).
 
 ## Next task
 
 Module order (each = commit + push):
-1. `src/agent/state.py` + `src/agent/evidence.py` (+ tests) — structured state & evidence.
-2. `src/agent/controller.py` (+ tests) — AgentModel / ModelDecision / scripted+deterministic.
-3. `src/agent/progress.py` (+ tests) — duplicate + no-progress detection.
-4. Integrate into `src/modes/binary/loop.py` + `cli.py` (+ loop tests), keep back-compat.
 5. `src/agent/evaluation.py` + `agent-eval` CLI (+ tests).
 6. Docs: AGENT_LOOP.md, PROGRESS.md, README, OVERNIGHT_REPORT.md.
+7. Optional: realistic x86 ELF + gdb end-to-end on the researcher host (demo evidence).
 
 ## Available resources
 

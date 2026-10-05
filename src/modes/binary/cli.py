@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from ...config import AgentConfig
@@ -18,9 +19,11 @@ from .workflow import (
 )
 from .patching import load_patch_input, patch_validate, render_patch_validation_markdown
 from .loop import PROBLEM_STATUSES, render_agent_loop_markdown, run_agent_loop
+from ...agent.evaluation import compare_trajectories, evaluate_trajectory, render_evaluation_markdown
 
 BINARY_COMMANDS = {
     "agent-loop",
+    "agent-eval",
     "binary-scan",
     "binary-plan",
     "binary-run",
@@ -60,6 +63,14 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     agent_loop.add_argument("--max-repeats", type=int, default=3, help="consecutive identical executed actions before stopping")
     agent_loop.add_argument("--dry-run", action="store_true", help="preview chosen actions without execution")
     agent_loop.add_argument("--timeout", type=int, default=30, help="per-action timeout in seconds")
+
+    agent_eval = subparsers.add_parser("agent-eval", help="compute measured metrics from one or more loop trajectories")
+    agent_eval.add_argument(
+        "--trajectory", action="append", required=True, type=Path, help="loop trajectory json (repeatable for comparison)"
+    )
+    agent_eval.add_argument("--label", action="append", default=[], help="optional label per --trajectory (repeatable)")
+    agent_eval.add_argument("--output", type=Path, required=True, help="output metrics json")
+    agent_eval.add_argument("--report", type=Path, help="optional markdown metrics report")
 
     binary_scan = subparsers.add_parser("binary-scan", help="collect bounded local evidence for a binary")
     binary_scan.add_argument("--root", type=Path, required=True, help="workspace root")
@@ -200,6 +211,23 @@ def handle_command(args: argparse.Namespace) -> int | None:
         write_binary_json(args.output, artifact)
         print(f"agent loop status={artifact.get('status')} wrote {args.output}")
         return 0 if artifact.get("status") not in PROBLEM_STATUSES else 2
+
+    if args.command == "agent-eval":
+        labels = list(args.label or [])
+        named: list[tuple[str, dict]] = []
+        for index, trajectory_path in enumerate(args.trajectory):
+            trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            label = labels[index] if index < len(labels) else trajectory_path.stem
+            named.append((label, trajectory))
+        if len(named) == 1:
+            payload = evaluate_trajectory(named[0][1])
+        else:
+            payload = compare_trajectories(named)
+        write_binary_json(args.output, payload)
+        if args.report:
+            write_report(args.report, render_evaluation_markdown(payload))
+        print(f"agent eval wrote {args.output}")
+        return 0
 
     if args.command == "binary-scan":
         config = AgentConfig.load(args.config)

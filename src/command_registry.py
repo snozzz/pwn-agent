@@ -39,6 +39,7 @@ CONTROL_PLANE_MAIN_SUBCOMMANDS = {
     "binary-plan",
     "binary-run",
     "agent-loop",
+    "agent-eval",
 }
 
 ALLOWED_MAIN_SUBCOMMANDS = LEAF_MAIN_SUBCOMMANDS | CONTROL_PLANE_MAIN_SUBCOMMANDS
@@ -283,6 +284,8 @@ def _validate_path_options(args: list[str], root: Path) -> None:
         "--model-response-json",
         "--model-response-jsonl",
         "--executor-state",
+        "--trajectory",
+        "--metrics",
     }
 
     index = 0
