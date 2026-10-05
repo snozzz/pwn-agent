@@ -51,6 +51,14 @@ Module order (each = commit + push):
 5. `src/agent/evaluation.py` + `agent-eval` CLI (+ tests).
 6. Docs: AGENT_LOOP.md, PROGRESS.md, README, OVERNIGHT_REPORT.md.
 
+## Available resources
+
+- Researcher-provided **x86_64 Linux (WSL2)** host reachable over SSH (key-based auth
+  already set up; connection details intentionally NOT committed). Has `gdb`, `readelf`,
+  `gcc`, `python3`; `checksec` not present. Use only for an optional realistic ELF +
+  gdb crash-triage end-to-end validation near the end. All development stays local with
+  fixtures; the suite does not depend on this host.
+
 ## Discovered problems
 
 - W4 (no-progress) is reproducible live: on arm64/Mach-O targets the planner re-suggests
