@@ -17,7 +17,7 @@ from .workflow import (
     write_binary_json,
 )
 from .patching import load_patch_input, patch_validate, render_patch_validation_markdown
-from .loop import render_agent_loop_markdown, run_agent_loop
+from .loop import PROBLEM_STATUSES, render_agent_loop_markdown, run_agent_loop
 
 BINARY_COMMANDS = {
     "agent-loop",
@@ -42,14 +42,22 @@ def register_subcommands(subparsers: argparse._SubParsersAction[argparse.Argumen
     agent_loop.add_argument("--patch-validation-json", type=Path, help="optional patch validation json")
     agent_loop.add_argument("--verify-json", type=Path, help="optional binary verify json")
     model_group = agent_loop.add_mutually_exclusive_group(required=True)
-    model_group.add_argument("--model-response-json", type=Path, help="single model response json")
-    model_group.add_argument("--model-response-jsonl", type=Path, help="stream of model response json objects")
+    model_group.add_argument("--model-response-json", type=Path, help="single model response json (scripted controller)")
+    model_group.add_argument("--model-response-jsonl", type=Path, help="stream of model response json objects (scripted controller)")
+    model_group.add_argument(
+        "--controller",
+        choices=["deterministic"],
+        help="run an in-process controller instead of replaying pre-generated responses",
+    )
     agent_loop.add_argument("--output", type=Path, required=True, help="output loop trajectory json")
     agent_loop.add_argument("--report", type=Path, help="optional markdown loop report")
     agent_loop.add_argument("--state", type=Path, help="optional persisted loop state json")
     agent_loop.add_argument("--executor-state", type=Path, help="optional persisted executor state json")
+    agent_loop.add_argument("--objective", help="optional natural-language objective recorded in agent state")
     agent_loop.add_argument("--max-steps", type=int, default=1, help="maximum loop iterations")
     agent_loop.add_argument("--max-failures", type=int, default=1, help="maximum rejected/failed iterations")
+    agent_loop.add_argument("--max-no-progress", type=int, default=2, help="consecutive no-progress iterations before stopping")
+    agent_loop.add_argument("--max-repeats", type=int, default=3, help="consecutive identical executed actions before stopping")
     agent_loop.add_argument("--dry-run", action="store_true", help="preview chosen actions without execution")
     agent_loop.add_argument("--timeout", type=int, default=30, help="per-action timeout in seconds")
 
@@ -155,8 +163,16 @@ def handle_command(args: argparse.Namespace) -> int | None:
         return None
 
     if args.command == "agent-loop":
-        model_response_path = args.model_response_json if args.model_response_json is not None else args.model_response_jsonl
-        model_response_format = "json" if args.model_response_json is not None else "jsonl"
+        if args.controller is not None:
+            controller = args.controller
+            model_response_path = None
+            model_response_format = "json"
+        else:
+            controller = None
+            model_response_path = (
+                args.model_response_json if args.model_response_json is not None else args.model_response_jsonl
+            )
+            model_response_format = "json" if args.model_response_json is not None else "jsonl"
         artifact = run_agent_loop(
             root=args.root,
             plan_path=args.plan,
@@ -164,14 +180,18 @@ def handle_command(args: argparse.Namespace) -> int | None:
             trajectory_path=args.output,
             model_response_path=model_response_path,
             model_response_format=model_response_format,
+            controller=controller,
             analysis_json=args.analysis_json,
             crash_json=args.crash_json,
             patch_validation_json=args.patch_validation_json,
             verify_json=args.verify_json,
             state_path=args.state,
             executor_state_path=args.executor_state,
+            objective=args.objective,
             max_steps=args.max_steps,
             max_failures=args.max_failures,
+            max_no_progress=args.max_no_progress,
+            max_repeats=args.max_repeats,
             dry_run=args.dry_run,
             timeout_seconds=args.timeout,
         )
@@ -179,7 +199,7 @@ def handle_command(args: argparse.Namespace) -> int | None:
             write_report(args.report, render_agent_loop_markdown(artifact))
         write_binary_json(args.output, artifact)
         print(f"agent loop status={artifact.get('status')} wrote {args.output}")
-        return 0 if artifact.get("status") not in {"invalid-model-output", "failure-budget-exhausted"} else 2
+        return 0 if artifact.get("status") not in PROBLEM_STATUSES else 2
 
     if args.command == "binary-scan":
         config = AgentConfig.load(args.config)

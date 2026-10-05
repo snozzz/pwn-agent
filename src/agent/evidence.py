@@ -82,6 +82,12 @@ def _subcommand_of(command: list[str]) -> str | None:
     return None
 
 
+def artifact_slot_for_command(command: list[str]) -> str | None:
+    """Return the artifact slot a bounded leaf command is expected to refresh, if any."""
+    subcommand = _subcommand_of(list(command or []))
+    return SUBCOMMAND_ARTIFACT_SLOTS.get(subcommand) if subcommand else None
+
+
 def normalize_observation(
     *,
     action_id: str,
